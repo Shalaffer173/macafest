@@ -416,8 +416,8 @@ async function initMap() {
       maxZoom: 19,
       maxPitch: 0,
       attributionControl: false,
-      // Карту нельзя двигать и поворачивать — только приближать и отдалять.
-      dragPan: false,
+      // Карту можно двигать и масштабировать, но не поворачивать и не наклонять.
+      dragPan: true,
       dragRotate: false,
       pitchWithRotate: false,
       touchPitch: false,
