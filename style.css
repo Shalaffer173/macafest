@@ -159,7 +159,7 @@ body {
 .fab--nav {
   top: calc(var(--safe-top) + 16px);
   background: #000;
-  border: 2px solid #fbfffe;
+  border: 2px solid #000;
 }
 
 .fab--chat {
