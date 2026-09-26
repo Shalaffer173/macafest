@@ -1,4 +1,4 @@
-import { ATTRIBUTION, VECTOR_SOURCE, overlayLayers, rasterStyle, vectorStyle } from './map-style.js';
+import { ATTRIBUTION, VECTOR_SOURCE, overlayLayers, rasterStyle, vectorStyle } from './map-style.js?v=5';
 
 const MAPLIBRE_URL = 'https://cdn.jsdelivr.net/npm/maplibre-gl@6.11.2/dist/maplibre-gl.mjs';
 const STORAGE_KEY = 'dostavka:v1';
