@@ -17,8 +17,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@6.11.2/dist/maplibre-gl.css">
-  <link rel="stylesheet" href="style.css?v=6">
-  <script type="module" src="app.js?v=6"></script>
+  <link rel="stylesheet" href="style.css?v=7">
+  <script type="module" src="app.js?v=7"></script>
 </head>
 <body>
   <div id="map" class="map"></div>
@@ -62,39 +62,67 @@
   <div class="toast" id="toast" hidden></div>
 
   <section class="sheet" id="sheet">
-    <div class="sheet__grip"><div class="sheet__handle"></div></div>
-    <div class="sheet__content">
-      <div class="eta" data-edit="eta"><span data-bind="etaLabel"></span>&nbsp;<b data-bind="etaValue"></b></div>
+    <div class="sheet__cards">
+      <div class="card">
+        <div class="sheet__grip"><div class="sheet__handle"></div></div>
+        <div class="sheet__content">
+          <div class="eta" data-edit="eta"><span data-bind="etaLabel"></span>&nbsp;<b data-bind="etaValue"></b></div>
 
-      <div class="customer" data-edit="customer" data-bind="customer"></div>
+          <div class="customer" data-edit="customer" data-bind="customer"></div>
 
-      <div class="items" data-edit="items">
-        <span data-bind="items"></span>
-        <span class="items__view">
-          <span data-bind="viewLabel"></span>
-          <svg viewBox="0 0 10 16" width="9" height="15" aria-hidden="true"><path d="M2 1.8 8.2 8 2 14.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </span>
+          <div class="items" data-edit="items">
+            <span data-bind="items"></span>
+            <span class="items__view">
+              <span data-bind="viewLabel"></span>
+              <svg viewBox="0 0 10 16" width="9" height="15" aria-hidden="true"><path d="M2 1.8 8.2 8 2 14.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+          </div>
+
+          <div class="divider"></div>
+          <div class="field" data-edit="address">
+            <div class="field__label" data-bind="addressLabel"></div>
+            <div class="field__value" data-bind="address"></div>
+          </div>
+
+          <div class="divider"></div>
+          <div class="field" data-edit="instructions">
+            <div class="field__label" data-bind="instructionsLabel"></div>
+            <div class="field__value" data-bind="instructions"></div>
+          </div>
+
+          <div class="divider"></div>
+          <div class="field field--last" data-edit="note">
+            <div class="field__label" data-bind="noteLabel"></div>
+            <div class="field__value" data-bind="note"></div>
+          </div>
+
+          <div class="translate" data-edit="translate" data-bind="translate"></div>
+        </div>
       </div>
 
-      <div class="divider"></div>
-      <div class="field" data-edit="address">
-        <div class="field__label" data-bind="addressLabel"></div>
-        <div class="field__value" data-bind="address"></div>
+      <!-- Нижняя карточка только для вида: ничего не нажимается. -->
+      <div class="card card--help">
+        <div class="help__title">Проблеми з доставкою?</div>
+        <div class="help__row">
+          <svg class="help__icon" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+            <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/>
+            <path d="M9.2 9.3a2.9 2.9 0 0 1 5.6 1c0 1.9-2.8 2.4-2.8 4.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="12" cy="17.6" r="1.25" fill="currentColor"/>
+          </svg>
+          <span class="help__text">Отримати допомогу</span>
+          <svg class="help__chevron" viewBox="0 0 10 16" width="9" height="15" aria-hidden="true"><path d="M2 1.8 8.2 8 2 14.2" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div class="help__divider"></div>
+        <div class="swipe">
+          <div class="swipe__knob">
+            <svg viewBox="0 0 20 16" width="20" height="16" aria-hidden="true"><path d="M2 8h16M12 2l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="swipe__text">
+            <div class="swipe__title">На місці</div>
+            <div class="swipe__hint">Проведіть для підтвердження</div>
+          </div>
+        </div>
       </div>
-
-      <div class="divider"></div>
-      <div class="field" data-edit="instructions">
-        <div class="field__label" data-bind="instructionsLabel"></div>
-        <div class="field__value" data-bind="instructions"></div>
-      </div>
-
-      <div class="divider"></div>
-      <div class="field field--last" data-edit="note">
-        <div class="field__label" data-bind="noteLabel"></div>
-        <div class="field__value" data-bind="note"></div>
-      </div>
-
-      <div class="translate" data-edit="translate" data-bind="translate"></div>
     </div>
   </section>
 

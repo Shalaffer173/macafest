@@ -1,4 +1,4 @@
-import { ATTRIBUTION, VECTOR_SOURCE, overlayLayers, rasterStyle, vectorStyle } from './map-style.js?v=6';
+import { ATTRIBUTION, VECTOR_SOURCE, overlayLayers, rasterStyle, vectorStyle } from './map-style.js?v=7';
 
 const MAPLIBRE_URL = 'https://cdn.jsdelivr.net/npm/maplibre-gl@6.11.2/dist/maplibre-gl.mjs';
 const STORAGE_KEY = 'dostavka:v1';
@@ -171,12 +171,15 @@ function render() {
 }
 
 const sheet = $('sheet');
+const sheetCards = sheet.querySelector('.sheet__cards');
 let drag = null;
 let suppressClickUntil = 0;
 
+// Панель поднимается не выше своего содержимого — как в настоящем приложении.
 function sheetHeight() {
   const h = state.sheetH ?? Math.round(window.innerHeight * DEFAULT_SHEET_SHARE);
-  return Math.min(Math.max(h, SHEET_MIN), window.innerHeight - SHEET_TOP_GAP);
+  const max = Math.min(window.innerHeight - SHEET_TOP_GAP, sheetCards.offsetHeight);
+  return Math.min(Math.max(h, SHEET_MIN), max);
 }
 
 function layoutSheet() {
@@ -288,6 +291,7 @@ editorForm.addEventListener('submit', (e) => {
   }
   saveState();
   render();
+  layoutSheet();
   closeEditor();
 });
 
@@ -477,5 +481,6 @@ async function initMap() {
 
 render();
 layoutSheet();
+document.fonts?.ready.then(layoutSheet);
 setAttribution(ATTRIBUTION.vector);
 initMap();

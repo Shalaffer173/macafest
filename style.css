@@ -3,11 +3,11 @@
   --sheet-bg: #161a19;
   --pill-bg: #242925;
   --divider: #282d2b;
-  --text: #ffffff;
-  --text-label: #b5bab8;
+  --text: #eceeed;
+  --text-label: #b0b6b4;
   --text-muted: #a9aeac;
   --chevron: #7d8381;
-  --accent-text: #96d8b0;
+  --accent-text: #8de1b1;
   --green: #1b975b;
   --chat-green: #2c8559;
   --nav-blue: #78d1ea;
@@ -254,8 +254,20 @@ body {
   height: var(--sheet-h);
   overflow: hidden;
   border-radius: 16px 16px 0 0;
-  background: var(--sheet-bg);
+  background: #000;
   touch-action: none;
+}
+
+/* Панель — это карточки с чёрными промежутками. */
+.sheet__cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card {
+  border-radius: 16px;
+  background: var(--sheet-bg);
 }
 
 .sheet__grip {
@@ -278,7 +290,7 @@ body {
 }
 
 .sheet__content {
-  padding: 0 24px 28px;
+  padding: 0 24px 18px;
 }
 
 [data-edit] {
@@ -364,12 +376,100 @@ body {
 }
 
 .translate {
-  display: inline-block;
+  width: fit-content;
   margin-top: 8px;
   font-size: 16px;
   font-weight: 600;
   line-height: 22px;
   color: var(--accent-text);
+}
+
+/* ---------- «Проблеми з доставкою?» и кнопка «На місці» (только для вида) ---------- */
+
+.card--help {
+  padding: 24.2px 0 calc(24px + env(safe-area-inset-bottom, 0px));
+}
+
+.help__title {
+  padding: 0 24px;
+  font-size: 17.6px;
+  font-weight: 700;
+  line-height: 24px;
+}
+
+.help__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 44px;
+  margin-top: 6.3px;
+  padding: 0 29px 0 24px;
+  font-size: 16px;
+  line-height: 22px;
+}
+
+.help__icon,
+.help__chevron {
+  flex: none;
+}
+
+.help__text {
+  flex: 1;
+}
+
+.help__chevron {
+  color: var(--chevron);
+}
+
+.help__divider {
+  height: 1px;
+  margin-top: 13.5px;
+  background: var(--divider);
+}
+
+.swipe {
+  position: relative;
+  height: 56px;
+  margin: 11.2px 24px 0;
+  border-radius: 28px;
+  background: var(--chat-green);
+}
+
+.swipe__knob {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--chat-green);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.swipe__text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 2px 0 0 16px;
+  color: #fff;
+  text-align: center;
+}
+
+.swipe__title {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 20px;
+}
+
+.swipe__hint {
+  margin-top: 1px;
+  font-size: 12px;
+  line-height: 16px;
 }
 
 /* ---------- Окно редактирования ---------- */
