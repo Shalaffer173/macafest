@@ -66,12 +66,13 @@ class ZoomTrollTool:
     def __init__(self, root):
         self.root = root
         self.root.title("Zoom Troll Tool")
-        self.root.geometry("520x600")
+        self.root.geometry("520x640")
         self.root.resizable(False, False)
 
         self.hand_running = False
         self.name_running = False
         self.chat_running = False
+        self.clean_running = False
         self.driver = None
 
         tk.Label(root, text="ZOOM TROLL TOOL", font=("Arial", 16, "bold")).pack(pady=6)
@@ -82,6 +83,7 @@ class ZoomTrollTool:
         self._build_hand_tab(notebook)
         self._build_name_tab(notebook)
         self._build_chat_tab(notebook)
+        self._build_clean_tab(notebook)
 
         # FULL SEND button
         full_frame = tk.Frame(root)
@@ -386,6 +388,169 @@ class ZoomTrollTool:
         self.chat_start_btn.config(state=tk.NORMAL)
         self.chat_stop_btn.config(state=tk.DISABLED)
 
+    # ==================== CLEAN TAB ====================
+    def _build_clean_tab(self, notebook):
+        tab = tk.Frame(notebook, padx=10, pady=10)
+        notebook.add(tab, text=" 🧹 Очистка ")
+
+        tk.Label(tab, text="Очистка куки + смена IP через Urban VPN", font=("Arial", 10)).pack(pady=3)
+
+        # Urban VPN extension ID
+        tk.Label(tab, text="ID расширения Urban VPN в Chrome:", font=("Arial", 9)).pack(anchor=tk.W, pady=(5, 0))
+        id_frame = tk.Frame(tab)
+        id_frame.pack(fill=tk.X, pady=2)
+        self.vpn_ext_id = tk.Entry(id_frame, width=40, font=("Arial", 9))
+        self.vpn_ext_id.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.vpn_ext_id.insert(0, "eppiocemhmnlbhjplcgkofciiegomcon")
+
+        tk.Label(tab, text="(chrome://extensions → ID расширения Urban VPN)", font=("Arial", 8), fg="#666").pack(anchor=tk.W)
+
+        settings_f = tk.Frame(tab)
+        settings_f.pack(fill=tk.X, pady=5)
+        tk.Label(settings_f, text="Chrome Port:", font=("Arial", 9)).pack(side=tk.LEFT)
+        self.clean_port = tk.Entry(settings_f, width=6, font=("Arial", 10))
+        self.clean_port.pack(side=tk.LEFT, padx=5)
+        self.clean_port.insert(0, "9222")
+        tk.Label(settings_f, text="Кулдаун (сек):", font=("Arial", 9)).pack(side=tk.LEFT, padx=(15, 0))
+        self.clean_cd_entry = tk.Entry(settings_f, width=6, font=("Arial", 10))
+        self.clean_cd_entry.pack(side=tk.LEFT, padx=5)
+        self.clean_cd_entry.insert(0, "30")
+
+        self.clean_status, self.clean_status_label, self.clean_start_btn, self.clean_stop_btn = \
+            make_status_and_buttons(tab, self.clean_start, self.clean_stop, "CONNECT & START")
+        self.clean_start_btn.config(bg="#795548")
+
+        self.clean_log_var = tk.StringVar(value="")
+        tk.Label(tab, textvariable=self.clean_log_var, font=("Arial", 8), fg="#666", wraplength=450,
+                 justify=tk.LEFT).pack(anchor=tk.W, pady=(3, 0))
+
+    def clean_start(self):
+        if not SELENIUM_AVAILABLE:
+            messagebox.showerror("Ошибка", "pip install selenium webdriver-manager")
+            return
+        try:
+            cd = float(self.clean_cd_entry.get())
+            if cd < 5:
+                cd = 5
+        except ValueError:
+            cd = 30
+        port = self.clean_port.get().strip()
+        ext_id = self.vpn_ext_id.get().strip()
+        self.clean_start_btn.config(state=tk.DISABLED)
+        self.clean_status.set("Подключаюсь...")
+        self.clean_status_label.config(fg="orange")
+        threading.Thread(target=self._clean_loop, args=(port, cd, ext_id), daemon=True).start()
+
+    def _clean_loop(self, port, cooldown, ext_id):
+        try:
+            self._ensure_driver(port)
+            self.clean_running = True
+            self.root.after(0, lambda: self.clean_status.set("ЧИСТИМ + VPN"))
+            self.root.after(0, lambda: self.clean_status_label.config(fg="green"))
+            self.root.after(0, lambda: self.clean_stop_btn.config(state=tk.NORMAL))
+
+            while self.clean_running:
+                # 1. Clear cookies
+                try:
+                    self.driver.delete_all_cookies()
+                    self.root.after(0, lambda: self.clean_log_var.set("Куки очищены"))
+                except Exception as e:
+                    self.root.after(0, lambda: self.clean_log_var.set(f"Ошибка куки: {e}"))
+
+                # 2. Clear localStorage / sessionStorage via JS
+                try:
+                    self.driver.execute_script("window.localStorage.clear(); window.sessionStorage.clear();")
+                except Exception:
+                    pass
+
+                # 3. Toggle Urban VPN — open extension popup and click connect/disconnect
+                try:
+                    current_url = self.driver.current_url
+                    vpn_url = f"chrome-extension://{ext_id}/popup.html"
+                    self.driver.get(vpn_url)
+                    time.sleep(1.5)
+
+                    # Try to find and click the main connect/power button
+                    wait = WebDriverWait(self.driver, 5)
+                    clicked = False
+
+                    # Urban VPN typical selectors
+                    btn_selectors = [
+                        'button.connect-btn', 'button.disconnect-btn',
+                        '[class*="connect"]', '[class*="power"]',
+                        'button.main-button', '.on-off-btn',
+                        '#connectBtn', '#connect', '.connect',
+                        'button[class*="Connect"]', 'button[class*="Disconnect"]',
+                        '.vpn-button', '[class*="toggle"]',
+                    ]
+                    for sel in btn_selectors:
+                        try:
+                            btn = self.driver.find_element(By.CSS_SELECTOR, sel)
+                            if btn.is_displayed():
+                                btn.click()
+                                clicked = True
+                                self.root.after(0, lambda: self.clean_log_var.set(
+                                    "VPN: нажал кнопку подключения"))
+                                break
+                        except Exception:
+                            continue
+
+                    if not clicked:
+                        # Fallback: click any large button
+                        buttons = self.driver.find_elements(By.TAG_NAME, 'button')
+                        for b in buttons:
+                            try:
+                                if b.is_displayed() and b.size['height'] > 30:
+                                    b.click()
+                                    clicked = True
+                                    self.root.after(0, lambda: self.clean_log_var.set(
+                                        "VPN: нажал кнопку (fallback)"))
+                                    break
+                            except Exception:
+                                continue
+
+                    if not clicked:
+                        self.root.after(0, lambda: self.clean_log_var.set(
+                            "VPN: не нашёл кнопку подключения"))
+
+                    time.sleep(2)
+
+                    # Wait, then click again to reconnect to new server
+                    for sel in btn_selectors:
+                        try:
+                            btn = self.driver.find_element(By.CSS_SELECTOR, sel)
+                            if btn.is_displayed():
+                                btn.click()
+                                self.root.after(0, lambda: self.clean_log_var.set(
+                                    "VPN: переподключение к новому серверу"))
+                                break
+                        except Exception:
+                            continue
+
+                    time.sleep(1)
+                    # Go back to the page we were on
+                    self.driver.get(current_url)
+                    time.sleep(1)
+
+                except Exception as e:
+                    self.root.after(0, lambda: self.clean_log_var.set(f"VPN ошибка: {e}"))
+
+                time.sleep(cooldown)
+
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror("Ошибка",
+                f"Chrome порт {port}:\n{e}"))
+            self.root.after(0, lambda: self.clean_start_btn.config(state=tk.NORMAL))
+            self.root.after(0, lambda: self.clean_status.set("Ошибка"))
+            self.root.after(0, lambda: self.clean_status_label.config(fg="red"))
+
+    def clean_stop(self):
+        self.clean_running = False
+        self.clean_status.set("Выкл")
+        self.clean_status_label.config(fg="red")
+        self.clean_start_btn.config(state=tk.NORMAL)
+        self.clean_stop_btn.config(state=tk.DISABLED)
+
     # ==================== SHARED ====================
     def _ensure_driver(self, port):
         if self.driver:
@@ -518,11 +683,14 @@ class ZoomTrollTool:
             self.name_start()
         if not self.chat_running:
             self.chat_start()
+        if not self.clean_running:
+            self.clean_start()
 
     def stop_all(self):
         self.hand_stop()
         self.name_stop()
         self.chat_stop()
+        self.clean_stop()
         self.full_btn.config(state=tk.NORMAL)
         self.full_stop_btn.config(state=tk.DISABLED)
 
@@ -530,6 +698,7 @@ class ZoomTrollTool:
         self.hand_running = False
         self.name_running = False
         self.chat_running = False
+        self.clean_running = False
         if self.driver:
             try:
                 self.driver.quit()
