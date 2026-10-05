@@ -66,7 +66,7 @@ class ZoomTrollTool:
     def __init__(self, root):
         self.root = root
         self.root.title("Zoom Troll Tool")
-        self.root.geometry("520x520")
+        self.root.geometry("520x600")
         self.root.resizable(False, False)
 
         self.hand_running = False
@@ -82,6 +82,18 @@ class ZoomTrollTool:
         self._build_hand_tab(notebook)
         self._build_name_tab(notebook)
         self._build_chat_tab(notebook)
+
+        # FULL SEND button
+        full_frame = tk.Frame(root)
+        full_frame.pack(fill=tk.X, padx=8, pady=(2, 0))
+        self.full_btn = tk.Button(full_frame, text="ЗАПУСТИТЬ ВСЁ РАЗОМ",
+                                  bg="#9C27B0", fg="white", font=("Arial", 12, "bold"),
+                                  command=self.start_all)
+        self.full_btn.pack(fill=tk.X, ipady=4)
+        self.full_stop_btn = tk.Button(full_frame, text="ОСТАНОВИТЬ ВСЁ",
+                                       bg="#333", fg="white", font=("Arial", 10, "bold"),
+                                       command=self.stop_all, state=tk.DISABLED)
+        self.full_stop_btn.pack(fill=tk.X, ipady=2, pady=(2, 0))
 
         # Instructions at the bottom
         info = tk.LabelFrame(root, text=" Инструкция ", font=("Arial", 9), padx=8, pady=4)
@@ -496,6 +508,23 @@ class ZoomTrollTool:
             ))).click()
         except Exception:
             pass
+
+    def start_all(self):
+        self.full_btn.config(state=tk.DISABLED)
+        self.full_stop_btn.config(state=tk.NORMAL)
+        if not self.hand_running:
+            self.hand_start()
+        if not self.name_running:
+            self.name_start()
+        if not self.chat_running:
+            self.chat_start()
+
+    def stop_all(self):
+        self.hand_stop()
+        self.name_stop()
+        self.chat_stop()
+        self.full_btn.config(state=tk.NORMAL)
+        self.full_stop_btn.config(state=tk.DISABLED)
 
     def _on_close(self):
         self.hand_running = False
