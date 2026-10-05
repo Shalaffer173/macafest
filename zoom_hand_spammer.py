@@ -2,8 +2,9 @@
 Zoom Troll Tool
 ---------------
 1) Hand Raise Spam: toggles raise/lower hand every 0.2s (Alt+Y)
-2) Name Changer: connects to browser Zoom via Selenium,
-   randomly swaps your display name to one of the participants every 1s
+2) Name Changer: two modes
+   - Manual: you type names, it picks randomly
+   - Auto: scrapes participant list from browser Zoom, picks randomly
 
 Requirements:
     pip install pyautogui selenium webdriver-manager
@@ -26,7 +27,6 @@ SELENIUM_AVAILABLE = False
 try:
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.chrome.service import Service
     from selenium.webdriver.common.by import By
     from selenium.webdriver.common.action_chains import ActionChains
     from selenium.webdriver.support.ui import WebDriverWait
@@ -40,7 +40,7 @@ class ZoomTrollTool:
     def __init__(self, root):
         self.root = root
         self.root.title("Zoom Troll Tool")
-        self.root.geometry("480x580")
+        self.root.geometry("500x680")
         self.root.resizable(False, False)
 
         self.hand_running = False
@@ -51,12 +51,11 @@ class ZoomTrollTool:
 
         tk.Label(root, text="ZOOM TROLL TOOL", font=("Arial", 16, "bold")).pack(pady=8)
 
-        # ===== HAND SPAM SECTION =====
+        # ===== HAND SPAM =====
         hand_frame = tk.LabelFrame(root, text=" Hand Raise Spam ", font=("Arial", 11, "bold"), padx=10, pady=5)
         hand_frame.pack(fill=tk.X, padx=10, pady=5)
 
         tk.Label(hand_frame, text="Alt+Y каждые 0.2 сек (фокус на Zoom!)", font=("Arial", 9)).pack()
-
         self.hand_status = tk.StringVar(value="Выкл")
         tk.Label(hand_frame, textvariable=self.hand_status, font=("Arial", 10, "bold"), fg="red").pack()
 
@@ -69,25 +68,48 @@ class ZoomTrollTool:
                                        font=("Arial", 10, "bold"), command=self.hand_stop, state=tk.DISABLED)
         self.hand_stop_btn.pack(side=tk.LEFT, padx=3)
 
-        # ===== NAME CHANGER SECTION =====
+        # ===== NAME CHANGER =====
         name_frame = tk.LabelFrame(root, text=" Name Changer (Browser Zoom) ", font=("Arial", 11, "bold"),
                                    padx=10, pady=5)
         name_frame.pack(fill=tk.X, padx=10, pady=5)
 
-        tk.Label(name_frame, text="Вставь имена участников (по одному на строку):", font=("Arial", 9)).pack(anchor=tk.W)
-        self.names_text = scrolledtext.ScrolledText(name_frame, width=50, height=6, font=("Arial", 10))
+        # Mode selector
+        self.name_mode = tk.StringVar(value="manual")
+        mode_frame = tk.Frame(name_frame)
+        mode_frame.pack(fill=tk.X, pady=3)
+        tk.Radiobutton(mode_frame, text="Ручной список", variable=self.name_mode, value="manual",
+                        font=("Arial", 10), command=self._toggle_name_mode).pack(side=tk.LEFT, padx=5)
+        tk.Radiobutton(mode_frame, text="Авто (парсить участников)", variable=self.name_mode, value="auto",
+                        font=("Arial", 10), command=self._toggle_name_mode).pack(side=tk.LEFT, padx=5)
+
+        # Manual names input
+        self.manual_frame = tk.Frame(name_frame)
+        self.manual_frame.pack(fill=tk.X)
+        tk.Label(self.manual_frame, text="Имена (по одному на строку):", font=("Arial", 9)).pack(anchor=tk.W)
+        self.names_text = scrolledtext.ScrolledText(self.manual_frame, width=52, height=5, font=("Arial", 10))
         self.names_text.pack(pady=3)
         self.names_text.insert(tk.END, "Иван Петров\nМария Сидорова\nАлексей Козлов")
 
-        url_frame = tk.Frame(name_frame)
-        url_frame.pack(fill=tk.X, pady=3)
-        tk.Label(url_frame, text="Chrome Debug Port:", font=("Arial", 9)).pack(side=tk.LEFT)
-        self.debug_port = tk.Entry(url_frame, width=8, font=("Arial", 10))
+        # Auto mode info
+        self.auto_frame = tk.Frame(name_frame)
+        tk.Label(self.auto_frame, text="Скрипт сам спарсит всех участников из Zoom\n"
+                 "и будет менять твоё имя на случайного из них",
+                 font=("Arial", 9), fg="#2196F3", justify=tk.LEFT).pack(anchor=tk.W)
+        self.participants_var = tk.StringVar(value="Участники: не загружены")
+        tk.Label(self.auto_frame, textvariable=self.participants_var, font=("Arial", 9), fg="#666").pack(anchor=tk.W)
+
+        # Chrome port
+        port_frame = tk.Frame(name_frame)
+        port_frame.pack(fill=tk.X, pady=3)
+        tk.Label(port_frame, text="Chrome Debug Port:", font=("Arial", 9)).pack(side=tk.LEFT)
+        self.debug_port = tk.Entry(port_frame, width=8, font=("Arial", 10))
         self.debug_port.pack(side=tk.LEFT, padx=5)
         self.debug_port.insert(0, "9222")
 
         self.name_status = tk.StringVar(value="Выкл")
-        tk.Label(name_frame, textvariable=self.name_status, font=("Arial", 10, "bold"), fg="red").pack()
+        self.name_status_label = tk.Label(name_frame, textvariable=self.name_status,
+                                          font=("Arial", 10, "bold"), fg="red")
+        self.name_status_label.pack()
 
         nbtn = tk.Frame(name_frame)
         nbtn.pack(pady=3)
@@ -101,20 +123,25 @@ class ZoomTrollTool:
         # ===== INSTRUCTIONS =====
         info_frame = tk.LabelFrame(root, text=" Инструкция ", font=("Arial", 10), padx=10, pady=5)
         info_frame.pack(fill=tk.X, padx=10, pady=5)
-
         instructions = (
-            "Для смены имени через браузерный Zoom:\n"
             "1. Закрой Chrome полностью\n"
-            "2. Запусти Chrome с отладкой:\n"
-            '   chrome.exe --remote-debugging-port=9222\n'
-            "3. Зайди на Zoom Web (app.zoom.us) и войди в конфу\n"
-            "4. Нажми CONNECT & START тут\n"
-            "\n"
-            "Скрипт сам найдёт Participants → твоё имя → Rename"
+            "2. Запусти: chrome.exe --remote-debugging-port=9222\n"
+            "3. Зайди на app.zoom.us и войди в конфу\n"
+            "4. Выбери режим и жми CONNECT & START\n\n"
+            "Ручной: меняет имя на случайное из твоего списка\n"
+            "Авто: парсит участников из Zoom и меняет на одного из них"
         )
         tk.Label(info_frame, text=instructions, font=("Arial", 8), justify=tk.LEFT, anchor=tk.W).pack(anchor=tk.W)
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _toggle_name_mode(self):
+        if self.name_mode.get() == "manual":
+            self.auto_frame.pack_forget()
+            self.manual_frame.pack(fill=tk.X, before=self.debug_port.master)
+        else:
+            self.manual_frame.pack_forget()
+            self.auto_frame.pack(fill=tk.X, before=self.debug_port.master)
 
     # ---- Hand Spam ----
     def hand_start(self):
@@ -142,18 +169,22 @@ class ZoomTrollTool:
             messagebox.showerror("Ошибка", "Selenium не установлен!\npip install selenium webdriver-manager")
             return
 
-        names = [n.strip() for n in self.names_text.get("1.0", tk.END).strip().split("\n") if n.strip()]
-        if len(names) < 2:
-            messagebox.showwarning("Мало имён", "Впиши хотя бы 2 имени, чтобы было между чем чередовать")
-            return
+        if self.name_mode.get() == "manual":
+            names = [n.strip() for n in self.names_text.get("1.0", tk.END).strip().split("\n") if n.strip()]
+            if len(names) < 2:
+                messagebox.showwarning("Мало имён", "Впиши хотя бы 2 имени")
+                return
+        else:
+            names = None
 
         port = self.debug_port.get().strip()
         self.name_start_btn.config(state=tk.DISABLED)
         self.name_status.set("Подключаюсь...")
+        self.name_status_label.config(fg="orange")
         self._name_thread = threading.Thread(target=self._name_connect_and_loop, args=(names, port), daemon=True)
         self._name_thread.start()
 
-    def _name_connect_and_loop(self, names, port):
+    def _name_connect_and_loop(self, manual_names, port):
         try:
             options = Options()
             options.add_experimental_option("debuggerAddress", f"127.0.0.1:{port}")
@@ -161,11 +192,23 @@ class ZoomTrollTool:
 
             self.name_running = True
             self.root.after(0, lambda: self.name_status.set("МЕНЯЕМ ИМЕНА"))
+            self.root.after(0, lambda: self.name_status_label.config(fg="green"))
             self.root.after(0, lambda: self.name_stop_btn.config(state=tk.NORMAL))
 
             while self.name_running:
                 try:
-                    new_name = random.choice(names)
+                    if manual_names:
+                        new_name = random.choice(manual_names)
+                    else:
+                        participants = self._scrape_participants()
+                        count = len(participants)
+                        self.root.after(0, lambda c=count, p=participants:
+                                        self.participants_var.set(f"Участники ({c}): {', '.join(p[:5])}{'...' if c > 5 else ''}"))
+                        if len(participants) < 2:
+                            time.sleep(1.0)
+                            continue
+                        new_name = random.choice(participants)
+
                     self._do_rename(new_name)
                 except Exception:
                     pass
@@ -181,36 +224,90 @@ class ZoomTrollTool:
             ))
             self.root.after(0, lambda: self.name_start_btn.config(state=tk.NORMAL))
             self.root.after(0, lambda: self.name_status.set("Ошибка"))
+            self.root.after(0, lambda: self.name_status_label.config(fg="red"))
+
+    def _scrape_participants(self):
+        """Parse participant names from the Zoom web participants panel."""
+        d = self.driver
+        names = []
+
+        # Make sure participants panel is open
+        try:
+            panel = d.find_elements(By.CSS_SELECTOR,
+                '.participants-section-container, [aria-label*="Participants panel"], '
+                '#participants-list, .participants-ul, '
+                '[class*="participants-list"], [class*="ParticipantsList"]')
+            if not panel:
+                btn = d.find_element(By.CSS_SELECTOR,
+                    '[aria-label*="Participants"], [aria-label*="participant"], '
+                    'button[data-testid="participants-button"], '
+                    '[aria-label*="участник"]')
+                btn.click()
+                time.sleep(0.5)
+        except Exception:
+            pass
+
+        # Scrape names from participant items
+        selectors = [
+            '.participants-item__name-section span',
+            '[class*="participant"] [class*="name"]',
+            '[class*="ParticipantItem"] span',
+            '.participants-li .participants-item__display-name',
+            '[data-testid*="participant"] span',
+            'li[class*="participant"] span:first-child',
+        ]
+        for sel in selectors:
+            try:
+                elements = d.find_elements(By.CSS_SELECTOR, sel)
+                for el in elements:
+                    text = el.text.strip()
+                    if text and "(Me)" not in text and "(Я)" not in text and "(me)" not in text and len(text) > 1:
+                        names.append(text)
+                if names:
+                    break
+            except Exception:
+                continue
+
+        # Fallback: grab all text nodes inside participant list area
+        if not names:
+            try:
+                list_el = d.find_element(By.CSS_SELECTOR,
+                    '[class*="participants-list"], [class*="ParticipantsList"], '
+                    '.participants-ul, #participants-list')
+                spans = list_el.find_elements(By.TAG_NAME, 'span')
+                for s in spans:
+                    text = s.text.strip()
+                    if text and "(Me)" not in text and "(Я)" not in text and len(text) > 1:
+                        if not any(kw in text.lower() for kw in ['mute', 'unmute', 'more', 'host', 'ещё']):
+                            names.append(text)
+            except Exception:
+                pass
+
+        return list(dict.fromkeys(names))
 
     def _do_rename(self, new_name):
         d = self.driver
         wait = WebDriverWait(d, 3)
 
-        # Open participants panel if not open — click Participants button
         try:
-            participants_btn = d.find_element(By.CSS_SELECTOR,
-                '[aria-label*="Participants"], [aria-label*="participant"], '
-                'button[data-testid="participants-button"], '
-                '.footer-button__participants-icon, '
-                '[aria-label*="участник"]')
             panel = d.find_elements(By.CSS_SELECTOR,
                 '.participants-section-container, [aria-label*="Participants panel"], '
                 '#participants-list, .participants-ul')
             if not panel:
-                participants_btn.click()
+                btn = d.find_element(By.CSS_SELECTOR,
+                    '[aria-label*="Participants"], [aria-label*="participant"], '
+                    'button[data-testid="participants-button"], '
+                    '[aria-label*="участник"]')
+                btn.click()
                 time.sleep(0.5)
         except Exception:
             pass
 
-        # Find own name item and hover to get "More" / "..." button
-        # In Zoom web, participant items have hover menus
         try:
-            # Look for the "(Me)" or "(Я)" marker
             me_items = d.find_elements(By.XPATH,
                 '//*[contains(text(),"(Me)") or contains(text(),"(Я)") or contains(text(),"(me)")]')
             if me_items:
                 me_el = me_items[0]
-                # Find the parent participant row
                 participant_row = me_el
                 for _ in range(5):
                     participant_row = participant_row.find_element(By.XPATH, '..')
@@ -220,7 +317,6 @@ class ZoomTrollTool:
                 ActionChains(d).move_to_element(participant_row).perform()
                 time.sleep(0.3)
 
-                # Click "More" or "..." button that appears on hover
                 more_btn = participant_row.find_element(By.CSS_SELECTOR,
                     '[aria-label*="More"], [aria-label*="ещё"], [aria-label*="Ещё"], '
                     'button.more-button, [data-testid="more-button"], '
@@ -228,7 +324,6 @@ class ZoomTrollTool:
                 more_btn.click()
                 time.sleep(0.3)
 
-                # Click "Rename"
                 rename_btn = wait.until(EC.element_to_be_clickable((By.XPATH,
                     '//a[contains(text(),"Rename")] | //a[contains(text(),"Переименовать")] | '
                     '//span[contains(text(),"Rename")] | //span[contains(text(),"Переименовать")] | '
@@ -237,7 +332,6 @@ class ZoomTrollTool:
                 rename_btn.click()
                 time.sleep(0.3)
 
-                # Type new name in the dialog input
                 rename_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR,
                     'input[aria-label*="name"], input[aria-label*="имя"], '
                     '.zm-modal input[type="text"], '
@@ -247,19 +341,18 @@ class ZoomTrollTool:
                 rename_input.send_keys(new_name)
                 time.sleep(0.1)
 
-                # Click OK / Save
                 ok_btn = wait.until(EC.element_to_be_clickable((By.XPATH,
                     '//button[contains(text(),"OK") or contains(text(),"Save") or '
                     'contains(text(),"Сохранить") or contains(text(),"Ок")]'
                 )))
                 ok_btn.click()
-
         except Exception:
             pass
 
     def name_stop(self):
         self.name_running = False
         self.name_status.set("Выкл")
+        self.name_status_label.config(fg="red")
         self.name_start_btn.config(state=tk.NORMAL)
         self.name_stop_btn.config(state=tk.DISABLED)
 
