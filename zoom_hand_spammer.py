@@ -32,7 +32,7 @@ class ZoomHandSpammer:
         self.root.resizable(False, False)
 
         self.running = False
-        self._thread: threading.Thread | None = None
+        self._thread = None
 
         self.status_var = tk.StringVar(value="Остановлен")
 
