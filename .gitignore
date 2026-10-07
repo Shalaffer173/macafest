@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+
+# PyInstaller output from build_exe.bat
+build/
+dist/
+*.spec
