@@ -18,9 +18,12 @@ Zoom's microphone to "CABLE Output".
 
 import os
 import random
+import subprocess
+import sys
 import threading
 import time
 import tkinter as tk
+import xml.etree.ElementTree as ET
 from tkinter import ttk, messagebox, scrolledtext, filedialog
 
 try:
@@ -54,6 +57,172 @@ except ImportError:
 
 AUDIO_EXTS = (".wav", ".mp3", ".ogg", ".flac", ".aiff", ".aif", ".opus")
 VIRTUAL_HINTS = ("cable", "voicemeeter", "virtual", "vb-audio")
+
+IS_WINDOWS = sys.platform == "win32"
+
+if IS_WINDOWS:
+    import ctypes
+    from ctypes import wintypes
+    WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+SOUNDPAD_PIPE = r"\\.\pipe\sp_remote_control"
+SOUNDPAD_EXE_CANDIDATES = (
+    r"C:\Program Files\Soundpad\Soundpad.exe",
+    r"C:\Program Files (x86)\Soundpad\Soundpad.exe",
+)
+
+
+class SoundpadRemote:
+    """Talks to an installed Soundpad over its remote-control named pipe."""
+
+    @staticmethod
+    def send(command, want_response=True):
+        with open(SOUNDPAD_PIPE, "r+b", 0) as pipe:
+            pipe.write(command.encode("utf-8"))
+            pipe.flush()
+            if not want_response:
+                return ""
+            chunks = []
+            for _ in range(64):
+                chunk = pipe.read(65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                if b"</Soundlist>" in b"".join(chunks) or len(chunk) < 65536:
+                    break
+            return b"".join(chunks).decode("utf-8", errors="ignore")
+
+    @classmethod
+    def is_alive(cls):
+        try:
+            cls.send("IsAlive()")
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def sound_list(cls):
+        root = ET.fromstring(cls.send("GetSoundlist()").strip())
+        sounds = []
+        for node in root.iter("Sound"):
+            index = node.get("index")
+            if index:
+                title = node.get("title") or os.path.basename(node.get("url") or "")
+                sounds.append((int(index), title or f"sound {index}"))
+        return sounds
+
+    @classmethod
+    def play(cls, index):
+        cls.send(f"DoPlaySound({index})")
+
+    @classmethod
+    def play_random(cls):
+        cls.send("DoPlayRandomSound()")
+
+    @classmethod
+    def stop(cls):
+        cls.send("DoStopSound()")
+
+
+class WindowEmbedder:
+    """Reparents another process's top-level window into a Tk widget."""
+
+    GWL_STYLE = -16
+    WS_CHILD = 0x40000000
+    WS_POPUP = 0x80000000
+    WS_CAPTION = 0x00C00000
+    WS_THICKFRAME = 0x00040000
+    WS_SYSMENU = 0x00080000
+    WS_MINIMIZEBOX = 0x00020000
+    WS_MAXIMIZEBOX = 0x00010000
+    SWP_FRAMECHANGED = 0x0020
+    SWP_NOZORDER = 0x0004
+    SWP_NOACTIVATE = 0x0010
+    SW_SHOW = 5
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+    def __init__(self):
+        self.hwnd = None
+        self.original_style = None
+
+    @staticmethod
+    def _find_window_by_exe(exe_name):
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        target = exe_name.lower()
+        found = []
+
+        def callback(hwnd, _param):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            if user32.GetWindowTextLengthW(hwnd) == 0:
+                return True
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            handle = kernel32.OpenProcess(
+                WindowEmbedder.PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+            if not handle:
+                return True
+            try:
+                buf = ctypes.create_unicode_buffer(32768)
+                size = wintypes.DWORD(len(buf))
+                if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                    if os.path.basename(buf.value).lower() == target:
+                        found.append(hwnd)
+                        return False
+            finally:
+                kernel32.CloseHandle(handle)
+            return True
+
+        user32.EnumWindows(WNDENUMPROC(callback), 0)
+        return found[0] if found else None
+
+    def attach(self, container, exe_name="Soundpad.exe"):
+        if not IS_WINDOWS:
+            raise RuntimeError("Встраивание окна работает только на Windows")
+        if self.hwnd:
+            # Re-attaching would overwrite the saved style and leave the
+            # window frameless after detach.
+            self.resize(container.winfo_width(), container.winfo_height())
+            return
+        hwnd = self._find_window_by_exe(exe_name)
+        if not hwnd:
+            raise RuntimeError(f"Окно {exe_name} не найдено — запусти программу")
+
+        user32 = ctypes.windll.user32
+        self.original_style = user32.GetWindowLongW(hwnd, self.GWL_STYLE)
+        stripped = self.original_style & ~(self.WS_CAPTION | self.WS_THICKFRAME |
+                                           self.WS_POPUP | self.WS_SYSMENU |
+                                           self.WS_MINIMIZEBOX | self.WS_MAXIMIZEBOX)
+        user32.SetWindowLongW(hwnd, self.GWL_STYLE, stripped | self.WS_CHILD)
+        user32.SetParent(hwnd, container.winfo_id())
+        user32.ShowWindow(hwnd, self.SW_SHOW)
+        self.hwnd = hwnd
+        self.resize(container.winfo_width(), container.winfo_height())
+
+    def resize(self, width, height):
+        if not self.hwnd or width < 2 or height < 2:
+            return
+        ctypes.windll.user32.SetWindowPos(
+            self.hwnd, 0, 0, 0, width, height,
+            self.SWP_FRAMECHANGED | self.SWP_NOZORDER | self.SWP_NOACTIVATE)
+
+    def detach(self):
+        """Give the window back to its owner, restoring its original frame."""
+        if not self.hwnd:
+            return
+        user32 = ctypes.windll.user32
+        try:
+            user32.SetParent(self.hwnd, 0)
+            if self.original_style is not None:
+                user32.SetWindowLongW(self.hwnd, self.GWL_STYLE, self.original_style)
+            user32.SetWindowPos(self.hwnd, 0, 100, 100, 900, 650,
+                                self.SWP_FRAMECHANGED | self.SWP_NOZORDER)
+            user32.ShowWindow(self.hwnd, self.SW_SHOW)
+        except Exception:
+            pass
+        self.hwnd = None
+        self.original_style = None
 
 
 def _to_stereo(block):
@@ -169,17 +338,20 @@ class ZoomTrollTool:
     def __init__(self, root):
         self.root = root
         self.root.title("Zoom Troll Tool")
-        self.root.geometry("560x780")
-        self.root.resizable(False, False)
+        self.root.geometry("640x860")
+        self.root.minsize(560, 700)
 
         self.hand_running = False
         self.name_running = False
         self.chat_running = False
         self.clean_running = False
         self.sound_running = False
+        self.spad_running = False
         self.driver = None
         self.sound_list = []
+        self.spad_list = []
         self.sound_engine = SoundEngine()
+        self.embedder = WindowEmbedder()
 
         tk.Label(root, text="ZOOM TROLL TOOL", font=("Arial", 16, "bold")).pack(pady=6)
 
@@ -190,6 +362,7 @@ class ZoomTrollTool:
         self._build_name_tab(notebook)
         self._build_chat_tab(notebook)
         self._build_clean_tab(notebook)
+        self._build_soundpad_tab(notebook)
         self._build_sound_tab(notebook)
 
         full_frame = tk.Frame(root)
@@ -208,7 +381,8 @@ class ZoomTrollTool:
         tk.Label(info, text=(
             "Рука: фокус на Zoom, жми START. Ник/Чат/Очистка: запусти Chrome с флагом\n"
             "chrome.exe --remote-debugging-port=9222, зайди на app.zoom.us\n"
-            "Соундпад: поставь VB-CABLE, выход = CABLE Input, микрофон в Zoom = CABLE Output"
+            "Soundpad: жми 'Втащить Soundpad внутрь' + включи в нём Remote control\n"
+            "Плеер/Soundpad: микрофон в Zoom = CABLE Output (нужен VB-CABLE)"
         ), font=("Arial", 8), justify=tk.LEFT).pack(anchor=tk.W)
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -650,10 +824,240 @@ class ZoomTrollTool:
         self.clean_start_btn.config(state=tk.NORMAL)
         self.clean_stop_btn.config(state=tk.DISABLED)
 
-    # ==================== SOUND TAB ====================
+    # ==================== SOUNDPAD TAB (embedded real app) ====================
+    def _build_soundpad_tab(self, notebook):
+        tab = tk.Frame(notebook, padx=8, pady=6)
+        notebook.add(tab, text=" 🎚 Soundpad ")
+
+        self.spad_enabled = tk.BooleanVar(value=True)
+        tk.Checkbutton(tab, text="Включить в 'Запустить всё разом'", variable=self.spad_enabled,
+                       font=("Arial", 9)).pack(anchor=tk.W)
+
+        path_f = tk.Frame(tab)
+        path_f.pack(fill=tk.X, pady=(2, 0))
+        tk.Label(path_f, text="Soundpad.exe:", font=("Arial", 9)).pack(side=tk.LEFT)
+        self.spad_path = tk.Entry(path_f, font=("Arial", 8))
+        self.spad_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+        self.spad_path.insert(0, next((p for p in SOUNDPAD_EXE_CANDIDATES if os.path.isfile(p)),
+                                      SOUNDPAD_EXE_CANDIDATES[0]))
+        tk.Button(path_f, text="Обзор", font=("Arial", 8, "bold"), bg="#009688", fg="white",
+                  command=self.spad_pick_exe).pack(side=tk.LEFT)
+
+        attach_f = tk.Frame(tab)
+        attach_f.pack(fill=tk.X, pady=3)
+        tk.Button(attach_f, text="Втащить Soundpad внутрь", font=("Arial", 9, "bold"),
+                  bg="#3F51B5", fg="white", command=self.spad_attach).pack(side=tk.LEFT)
+        tk.Button(attach_f, text="Отцепить", font=("Arial", 9, "bold"),
+                  bg="#607D8B", fg="white", command=self.spad_detach).pack(side=tk.LEFT, padx=4)
+
+        self.spad_embed_var = tk.StringVar(value="Soundpad не встроен")
+        tk.Label(tab, textvariable=self.spad_embed_var, font=("Arial", 8),
+                 fg="#666").pack(anchor=tk.W)
+
+        self.spad_container = tk.Frame(tab, bg="#1a1a1a", height=260,
+                                       highlightthickness=1, highlightbackground="#888")
+        self.spad_container.pack(fill=tk.BOTH, expand=True, pady=3)
+        self.spad_container.pack_propagate(False)
+        self.spad_container.bind("<Configure>", self._on_spad_resize)
+
+        ttk.Separator(tab, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=4)
+        tk.Label(tab, text="Автоматика (через Remote Control)",
+                 font=("Arial", 9, "bold")).pack(anchor=tk.W)
+
+        load_f = tk.Frame(tab)
+        load_f.pack(fill=tk.X, pady=2)
+        tk.Button(load_f, text="Загрузить список", font=("Arial", 9, "bold"),
+                  bg="#009688", fg="white", command=self.spad_load_list).pack(side=tk.LEFT)
+        self.spad_count_var = tk.StringVar(value="список не загружен")
+        tk.Label(load_f, textvariable=self.spad_count_var, font=("Arial", 8),
+                 fg="#666").pack(side=tk.LEFT, padx=8)
+
+        self.spad_mode = tk.StringVar(value="random")
+        mode_f = tk.Frame(tab)
+        mode_f.pack(fill=tk.X)
+        tk.Radiobutton(mode_f, text="Случайный трек", variable=self.spad_mode, value="random",
+                       font=("Arial", 9)).pack(side=tk.LEFT)
+        tk.Radiobutton(mode_f, text="Один на постоянке", variable=self.spad_mode, value="fixed",
+                       font=("Arial", 9)).pack(side=tk.LEFT, padx=6)
+
+        self.spad_combo = ttk.Combobox(tab, state="readonly", font=("Arial", 8))
+        self.spad_combo.pack(fill=tk.X, pady=2)
+
+        opts_f = tk.Frame(tab)
+        opts_f.pack(fill=tk.X)
+        self.spad_interrupt = tk.BooleanVar(value=True)
+        tk.Checkbutton(opts_f, text="Обрывать предыдущий", variable=self.spad_interrupt,
+                       font=("Arial", 9)).pack(side=tk.LEFT)
+        tk.Label(opts_f, text="Кулдаун (сек):", font=("Arial", 9)).pack(side=tk.LEFT, padx=(10, 0))
+        self.spad_cd_entry = tk.Entry(opts_f, width=6, font=("Arial", 10))
+        self.spad_cd_entry.pack(side=tk.LEFT, padx=4)
+        self.spad_cd_entry.insert(0, "5.0")
+
+        self.spad_status, self.spad_status_label, self.spad_start_btn, self.spad_stop_btn = \
+            make_status_and_buttons(tab, self.spad_start, self.spad_stop)
+        self.spad_start_btn.config(bg="#E91E63")
+
+        self.spad_log_var = tk.StringVar(value="")
+        tk.Label(tab, textvariable=self.spad_log_var, font=("Arial", 8), fg="#666",
+                 wraplength=600, justify=tk.LEFT).pack(anchor=tk.W)
+
+    def _on_spad_resize(self, event):
+        self.embedder.resize(event.width, event.height)
+
+    def spad_pick_exe(self):
+        path = filedialog.askopenfilename(title="Выбери Soundpad.exe",
+                                          filetypes=[("Soundpad", "Soundpad.exe"),
+                                                     ("Программы", "*.exe")])
+        if path:
+            self.spad_path.delete(0, tk.END)
+            self.spad_path.insert(0, path)
+
+    def spad_attach(self):
+        if not IS_WINDOWS:
+            messagebox.showerror("Только Windows",
+                                 "Встраивание чужого окна работает только на Windows")
+            return
+        try:
+            self.embedder.attach(self.spad_container)
+            self.spad_embed_var.set("Soundpad встроен в окно")
+            return
+        except RuntimeError:
+            pass
+
+        exe = self.spad_path.get().strip()
+        if not os.path.isfile(exe):
+            messagebox.showerror("Не найден Soundpad",
+                                 f"Нет файла:\n{exe}\n\nУкажи путь через 'Обзор'")
+            return
+        self.spad_embed_var.set("Запускаю Soundpad...")
+        threading.Thread(target=self._spad_launch_and_attach, args=(exe,), daemon=True).start()
+
+    def _spad_launch_and_attach(self, exe):
+        try:
+            subprocess.Popen([exe], cwd=os.path.dirname(exe))
+        except Exception as e:
+            self.root.after(0, lambda err=e: messagebox.showerror(
+                "Не запустился", f"Soundpad не запустился:\n{err}"))
+            return
+
+        for _ in range(30):
+            time.sleep(0.5)
+            try:
+                self.root.after(0, self._spad_try_attach)
+                if self.embedder.hwnd:
+                    return
+            except Exception:
+                pass
+        self.root.after(0, lambda: self.spad_embed_var.set(
+            "Soundpad запущен, но окно не поймалось — жми 'Втащить' ещё раз"))
+
+    def _spad_try_attach(self):
+        try:
+            self.embedder.attach(self.spad_container)
+            self.spad_embed_var.set("Soundpad встроен в окно")
+        except Exception:
+            pass
+
+    def spad_detach(self):
+        self.embedder.detach()
+        self.spad_embed_var.set("Soundpad отцеплен — снова отдельное окно")
+
+    def spad_load_list(self):
+        threading.Thread(target=self._spad_load_worker, daemon=True).start()
+
+    def _spad_load_worker(self):
+        try:
+            sounds = SoundpadRemote.sound_list()
+            if not sounds:
+                raise ValueError("Soundpad вернул пустой список")
+            self.spad_list = sounds
+            labels = [f"{i}. {t}" for i, t in sounds]
+            self.root.after(0, lambda: self.spad_combo.config(values=labels))
+            self.root.after(0, lambda: self.spad_combo.current(0))
+            self.root.after(0, lambda n=len(sounds): self.spad_count_var.set(f"треков: {n}"))
+            self.root.after(0, lambda: self.spad_log_var.set(""))
+        except FileNotFoundError:
+            self.root.after(0, lambda: messagebox.showerror(
+                "Нет Remote Control",
+                "Soundpad не отвечает по пайпу. Включи в нём:\n"
+                "Settings -> Remote control -> Allow remote control"))
+        except Exception as e:
+            self.root.after(0, lambda err=e: self.spad_log_var.set(f"Ошибка списка: {err}"))
+
+    def spad_start(self):
+        try:
+            cd = float(self.spad_cd_entry.get())
+            if cd < 0.5:
+                cd = 0.5
+        except ValueError:
+            cd = 5.0
+
+        fixed_index = None
+        if self.spad_mode.get() == "fixed":
+            if not self.spad_list:
+                messagebox.showwarning("Нет списка", "Сначала нажми 'Загрузить список'")
+                return
+            pos = self.spad_combo.current()
+            if pos < 0:
+                messagebox.showwarning("Не выбран трек", "Выбери трек в списке")
+                return
+            fixed_index = self.spad_list[pos][0]
+
+        self.spad_start_btn.config(state=tk.DISABLED)
+        self.spad_status.set("Проверяю Soundpad...")
+        self.spad_status_label.config(fg="orange")
+        threading.Thread(target=self._spad_loop, args=(fixed_index, cd), daemon=True).start()
+
+    def _spad_loop(self, fixed_index, cooldown):
+        if not SoundpadRemote.is_alive():
+            self.root.after(0, lambda: messagebox.showerror(
+                "Soundpad недоступен",
+                "Soundpad не отвечает. Запусти его и включи:\n"
+                "Settings -> Remote control -> Allow remote control"))
+            self.root.after(0, lambda: self.spad_start_btn.config(state=tk.NORMAL))
+            self.root.after(0, lambda: self.spad_status.set("Ошибка"))
+            self.root.after(0, lambda: self.spad_status_label.config(fg="red"))
+            return
+
+        self.spad_running = True
+        self.root.after(0, lambda: self.spad_status.set("КРУТИМ ЗВУК 🎚"))
+        self.root.after(0, lambda: self.spad_status_label.config(fg="green"))
+        self.root.after(0, lambda: self.spad_stop_btn.config(state=tk.NORMAL))
+
+        while self.spad_running:
+            try:
+                if self.spad_interrupt.get():
+                    SoundpadRemote.stop()
+                if fixed_index is not None:
+                    SoundpadRemote.play(fixed_index)
+                    label = f"трек {fixed_index}"
+                elif self.spad_list:
+                    index, title = random.choice(self.spad_list)
+                    SoundpadRemote.play(index)
+                    label = f"{index}. {title}"
+                else:
+                    SoundpadRemote.play_random()
+                    label = "случайный (выбрал сам Soundpad)"
+                self.root.after(0, lambda t=label: self.spad_log_var.set(f"Играет: {t}"))
+            except Exception as e:
+                self.root.after(0, lambda err=e: self.spad_log_var.set(f"Ошибка: {err}"))
+            time.sleep(cooldown)
+
+    def spad_stop(self):
+        self.spad_running = False
+        try:
+            SoundpadRemote.stop()
+        except Exception:
+            pass
+        self.spad_status.set("Выкл")
+        self.spad_status_label.config(fg="red")
+        self.spad_start_btn.config(state=tk.NORMAL)
+        self.spad_stop_btn.config(state=tk.DISABLED)
+
+    # ==================== PLAYER TAB (built-in engine) ====================
     def _build_sound_tab(self, notebook):
         tab = tk.Frame(notebook, padx=10, pady=6)
-        notebook.add(tab, text=" 🔊 Соундпад ")
+        notebook.add(tab, text=" 🎵 Плеер ")
 
         self.sound_enabled = tk.BooleanVar(value=True)
         tk.Checkbutton(tab, text="Включить в 'Запустить всё разом'", variable=self.sound_enabled,
@@ -1001,6 +1405,8 @@ class ZoomTrollTool:
             self.chat_start()
         if self.clean_enabled.get() and not self.clean_running:
             self.clean_start()
+        if self.spad_enabled.get() and not self.spad_running:
+            self.spad_start()
         if self.sound_enabled.get() and not self.sound_running:
             self.sound_start()
 
@@ -1009,6 +1415,7 @@ class ZoomTrollTool:
         self.name_stop()
         self.chat_stop()
         self.clean_stop()
+        self.spad_stop()
         self.sound_stop()
         self.full_btn.config(state=tk.NORMAL)
         self.full_stop_btn.config(state=tk.DISABLED)
@@ -1019,7 +1426,10 @@ class ZoomTrollTool:
         self.chat_running = False
         self.clean_running = False
         self.sound_running = False
+        self.spad_running = False
         self.sound_engine.stop()
+        # Hand Soundpad back its window, or it dies with this one.
+        self.embedder.detach()
         if self.driver:
             try:
                 self.driver.quit()
