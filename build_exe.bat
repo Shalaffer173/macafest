@@ -1,5 +1,5 @@
 @echo off
-echo === Zoom Troll Tool - Build EXE ===
+echo === ZoomWar - Build EXE ===
 echo.
 
 where python >nul 2>&1
@@ -14,11 +14,11 @@ pip install pyautogui selenium webdriver-manager pyinstaller
 
 echo.
 echo Sborka EXE...
-pyinstaller --onefile --windowed --name "ZoomTrollTool" zoom_hand_spammer.py
+pyinstaller --onefile --windowed --name "ZoomWar" zoomwar.py
 
 echo.
 echo === GOTOVO! ===
-echo EXE lezit v papke: dist\ZoomTrollTool.exe
+echo EXE lezit v papke: dist\ZoomWar.exe
 echo.
 echo VAZNO: v Soundpad vkljuchi Remote control:
 echo   Settings -^> Remote control -^> Allow remote control

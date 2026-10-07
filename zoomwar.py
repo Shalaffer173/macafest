@@ -1,6 +1,6 @@
 """
-Zoom Troll Tool
----------------
+ZoomWar
+-------
 Five tabs:
 1) Hand Raise Spam  - configurable cooldown
 2) Name Changer     - manual list or auto-scrape
@@ -58,6 +58,153 @@ SOUNDPAD_EXE_CANDIDATES = (
     r"C:\Program Files\Soundpad\Soundpad.exe",
     r"C:\Program Files (x86)\Soundpad\Soundpad.exe",
 )
+
+# ==================== THEME ====================
+BG = "#09090b"
+TILE = "#141418"
+TILE_HI = "#1d1d23"
+FIELD = "#0e0e11"
+EDGE = "#2b2b34"
+FG = "#ececf1"
+MUTED = "#75757f"
+ACCENT = "#ff2d55"
+OK = "#2ee06a"
+WARN = "#f5a524"
+DANGER = "#ff4d4d"
+INK = "#09090b"
+
+FONT = "Segoe UI" if IS_WINDOWS else "DejaVu Sans"
+MONO = "Consolas" if IS_WINDOWS else "DejaVu Sans Mono"
+
+
+def apply_theme(root):
+    root.configure(bg=BG)
+    style = ttk.Style(root)
+    style.theme_use("clam")
+
+    style.configure("TNotebook", background=BG, borderwidth=0)
+    style.configure("TNotebook.Tab", background=TILE, foreground=MUTED,
+                    padding=(13, 8), borderwidth=0, font=(FONT, 9, "bold"))
+    style.map("TNotebook.Tab",
+              background=[("selected", TILE_HI)],
+              foreground=[("selected", ACCENT)],
+              expand=[("selected", (0, 0, 0, 0))])
+
+    style.configure("TCombobox", fieldbackground=FIELD, background=TILE_HI,
+                    foreground=FG, arrowcolor=ACCENT, bordercolor=EDGE,
+                    lightcolor=EDGE, darkcolor=EDGE, borderwidth=1)
+    style.map("TCombobox",
+              fieldbackground=[("readonly", FIELD)],
+              foreground=[("readonly", FG)],
+              selectbackground=[("readonly", FIELD)],
+              selectforeground=[("readonly", FG)])
+    root.option_add("*TCombobox*Listbox.background", FIELD)
+    root.option_add("*TCombobox*Listbox.foreground", FG)
+    root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
+    root.option_add("*TCombobox*Listbox.selectForeground", INK)
+
+    style.configure("TSeparator", background=EDGE)
+
+
+def tile(parent, title=None, pad=10):
+    """A bordered dark card. Fill the returned widget's .body."""
+    outer = tk.Frame(parent, bg=EDGE)
+    body = tk.Frame(outer, bg=TILE, padx=pad, pady=pad)
+    body.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+    if title:
+        tk.Label(body, text=title.upper(), font=(FONT, 8, "bold"),
+                 bg=TILE, fg=MUTED).pack(anchor=tk.W, pady=(0, 7))
+    outer.body = body
+    return outer
+
+
+def row(parent, **pack_kw):
+    frame = tk.Frame(parent, bg=parent["bg"])
+    frame.pack(fill=tk.X, **pack_kw)
+    return frame
+
+
+def lbl(parent, text="", size=9, color=FG, bold=False, **kw):
+    return tk.Label(parent, text=text, bg=parent["bg"], fg=color,
+                    font=(FONT, size, "bold" if bold else "normal"), **kw)
+
+
+def ent(parent, width=None, size=10, mono=False):
+    entry = tk.Entry(parent, font=(MONO if mono else FONT, size), bg=FIELD, fg=FG,
+                     insertbackground=ACCENT, relief=tk.FLAT, highlightthickness=1,
+                     highlightbackground=EDGE, highlightcolor=ACCENT,
+                     disabledbackground=FIELD, selectbackground=ACCENT,
+                     selectforeground=INK)
+    if width:
+        entry.config(width=width)
+    return entry
+
+
+def check(parent, text, variable, color=FG):
+    return tk.Checkbutton(parent, text=text, variable=variable, bg=parent["bg"],
+                          fg=color, selectcolor=FIELD, activebackground=parent["bg"],
+                          activeforeground=ACCENT, font=(FONT, 9), bd=0,
+                          highlightthickness=0, anchor=tk.W, cursor="hand2")
+
+
+def radio(parent, text, variable, value, command=None):
+    return tk.Radiobutton(parent, text=text, variable=variable, value=value,
+                          command=command, bg=parent["bg"], fg=FG, selectcolor=FIELD,
+                          activebackground=parent["bg"], activeforeground=ACCENT,
+                          font=(FONT, 9), bd=0, highlightthickness=0, cursor="hand2")
+
+
+def btn(parent, text, command, color=ACCENT, filled=False, size=9, width=None):
+    """Flat tile button: dark face with coloured text, or a filled slab."""
+    widget = tk.Button(parent, text=text, command=command, relief=tk.FLAT, bd=0,
+                       font=(FONT, size, "bold"), cursor="hand2",
+                       highlightthickness=1, padx=12, pady=5,
+                       disabledforeground=MUTED)
+    if filled:
+        widget.config(bg=color, fg=INK, activebackground=color, activeforeground=INK,
+                      highlightbackground=color)
+    else:
+        widget.config(bg=TILE_HI, fg=color, activebackground=EDGE, activeforeground=color,
+                      highlightbackground=EDGE)
+    if width:
+        widget.config(width=width)
+    return widget
+
+
+def text_area(parent, height=4, size=9):
+    area = scrolledtext.ScrolledText(parent, height=height, font=(FONT, size), bg=FIELD,
+                                     fg=FG, insertbackground=ACCENT, relief=tk.FLAT,
+                                     highlightthickness=1, highlightbackground=EDGE,
+                                     highlightcolor=ACCENT, selectbackground=ACCENT,
+                                     selectforeground=INK, bd=0, wrap=tk.WORD)
+    area.vbar.config(bg=TILE_HI, troughcolor=BG, activebackground=ACCENT, bd=0,
+                     relief=tk.FLAT, highlightthickness=0, width=12)
+    return area
+
+
+def make_cooldown_row(parent, default="1.0"):
+    frame = tk.Frame(parent, bg=parent["bg"])
+    lbl(frame, "Кулдаун (сек)", color=MUTED).pack(side=tk.LEFT)
+    entry = ent(frame, width=6)
+    entry.pack(side=tk.LEFT, padx=6)
+    entry.insert(0, default)
+    return frame, entry
+
+
+def make_status_and_buttons(parent, start_cmd, stop_cmd, start_text="START"):
+    status_var = tk.StringVar(value="ВЫКЛ")
+    status_label = tk.Label(parent, textvariable=status_var, font=(FONT, 11, "bold"),
+                            bg=parent["bg"], fg=MUTED)
+    status_label.pack(pady=(0, 7))
+
+    btn_frame = tk.Frame(parent, bg=parent["bg"])
+    btn_frame.pack()
+    start_btn = btn(btn_frame, start_text, start_cmd, color=OK, width=16)
+    start_btn.pack(side=tk.LEFT, padx=3)
+    stop_btn = btn(btn_frame, "STOP", stop_cmd, color=DANGER, width=10)
+    stop_btn.config(state=tk.DISABLED)
+    stop_btn.pack(side=tk.LEFT, padx=3)
+    return status_var, status_label, start_btn, stop_btn
 
 
 class SoundpadRemote:
@@ -213,37 +360,13 @@ class WindowEmbedder:
         self.original_style = None
 
 
-def make_cooldown_row(parent, default="1.0"):
-    frame = tk.Frame(parent)
-    tk.Label(frame, text="Кулдаун (сек):", font=("Arial", 9)).pack(side=tk.LEFT)
-    entry = tk.Entry(frame, width=6, font=("Arial", 10))
-    entry.pack(side=tk.LEFT, padx=5)
-    entry.insert(0, default)
-    return frame, entry
-
-
-def make_status_and_buttons(parent, start_cmd, stop_cmd, start_text="START"):
-    status_var = tk.StringVar(value="Выкл")
-    status_label = tk.Label(parent, textvariable=status_var, font=("Arial", 10, "bold"), fg="red")
-    status_label.pack(pady=2)
-
-    btn_frame = tk.Frame(parent)
-    btn_frame.pack(pady=3)
-    start_btn = tk.Button(btn_frame, text=start_text, width=14, bg="#4CAF50", fg="white",
-                          font=("Arial", 10, "bold"), command=start_cmd)
-    start_btn.pack(side=tk.LEFT, padx=3)
-    stop_btn = tk.Button(btn_frame, text="STOP", width=10, bg="#f44336", fg="white",
-                         font=("Arial", 10, "bold"), command=stop_cmd, state=tk.DISABLED)
-    stop_btn.pack(side=tk.LEFT, padx=3)
-    return status_var, status_label, start_btn, stop_btn
-
-
-class ZoomTrollTool:
+class ZoomWar:
     def __init__(self, root):
         self.root = root
-        self.root.title("Zoom Troll Tool")
-        self.root.geometry("640x860")
-        self.root.minsize(560, 700)
+        self.root.title("ZoomWar")
+        self.root.geometry("660x960")
+        self.root.minsize(580, 760)
+        apply_theme(self.root)
 
         self.hand_running = False
         self.name_running = False
@@ -254,10 +377,13 @@ class ZoomTrollTool:
         self.spad_list = []
         self.embedder = WindowEmbedder()
 
-        tk.Label(root, text="ZOOM TROLL TOOL", font=("Arial", 16, "bold")).pack(pady=6)
+        header = tk.Frame(root, bg=BG)
+        header.pack(pady=(12, 8))
+        tk.Label(header, text="ZOOM", font=(FONT, 20, "bold"), bg=BG, fg=FG).pack(side=tk.LEFT)
+        tk.Label(header, text="WAR", font=(FONT, 20, "bold"), bg=BG, fg=ACCENT).pack(side=tk.LEFT)
 
         notebook = ttk.Notebook(root)
-        notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 4))
+        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 6))
 
         self._build_hand_tab(notebook)
         self._build_name_tab(notebook)
@@ -265,43 +391,54 @@ class ZoomTrollTool:
         self._build_clean_tab(notebook)
         self._build_soundpad_tab(notebook)
 
-        full_frame = tk.Frame(root)
-        full_frame.pack(fill=tk.X, padx=8, pady=(2, 0))
-        self.full_btn = tk.Button(full_frame, text="ЗАПУСТИТЬ ВСЁ РАЗОМ",
-                                  bg="#9C27B0", fg="white", font=("Arial", 12, "bold"),
-                                  command=self.start_all)
-        self.full_btn.pack(fill=tk.X, ipady=4)
-        self.full_stop_btn = tk.Button(full_frame, text="ОСТАНОВИТЬ ВСЁ",
-                                       bg="#333", fg="white", font=("Arial", 10, "bold"),
-                                       command=self.stop_all, state=tk.DISABLED)
-        self.full_stop_btn.pack(fill=tk.X, ipady=2, pady=(2, 0))
+        full_frame = tk.Frame(root, bg=BG)
+        full_frame.pack(fill=tk.X, padx=10)
+        self.full_btn = btn(full_frame, "ЗАПУСТИТЬ ВСЁ РАЗОМ", self.start_all,
+                            color=ACCENT, filled=True, size=12)
+        self.full_btn.pack(fill=tk.X, ipady=5)
+        self.full_stop_btn = btn(full_frame, "ОСТАНОВИТЬ ВСЁ", self.stop_all, color=DANGER)
+        self.full_stop_btn.config(state=tk.DISABLED)
+        self.full_stop_btn.pack(fill=tk.X, pady=(4, 0))
 
-        info = tk.LabelFrame(root, text=" Инструкция ", font=("Arial", 9), padx=8, pady=4)
-        info.pack(fill=tk.X, padx=8, pady=(0, 6))
-        tk.Label(info, text=(
+        info = tile(root, "Инструкция", pad=9)
+        info.pack(fill=tk.X, padx=10, pady=10)
+        tk.Label(info.body, bg=TILE, fg=MUTED, font=(FONT, 8), justify=tk.LEFT, text=(
             "Рука: фокус на Zoom, жми START. Ник/Чат/Очистка: запусти Chrome с флагом\n"
             "chrome.exe --remote-debugging-port=9222, зайди на app.zoom.us\n"
             "Soundpad: жми 'Втащить Soundpad внутрь' + включи в нём Remote control"
-        ), font=("Arial", 8), justify=tk.LEFT).pack(anchor=tk.W)
+        )).pack(anchor=tk.W)
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _new_tab(self, notebook, text):
+        tab = tk.Frame(notebook, bg=BG, padx=10, pady=10)
+        notebook.add(tab, text=text)
+        return tab
+
+    def _enable_strip(self, tab, variable):
+        strip = tile(tab, pad=7)
+        strip.pack(fill=tk.X, pady=(0, 8))
+        check(strip.body, "Включить в «ЗАПУСТИТЬ ВСЁ РАЗОМ»", variable,
+              color=ACCENT).pack(anchor=tk.W)
+
     # ==================== HAND TAB ====================
     def _build_hand_tab(self, notebook):
-        tab = tk.Frame(notebook, padx=10, pady=10)
-        notebook.add(tab, text=" ✋ Рука ")
+        tab = self._new_tab(notebook, " ✋ Рука ")
 
         self.hand_enabled = tk.BooleanVar(value=True)
-        tk.Checkbutton(tab, text="Включить в 'Запустить всё разом'", variable=self.hand_enabled,
-                       font=("Arial", 9)).pack(anchor=tk.W)
+        self._enable_strip(tab, self.hand_enabled)
 
-        tk.Label(tab, text="Спам поднятия/опускания руки (Alt+Y)", font=("Arial", 10)).pack(pady=5)
+        card = tile(tab, "Спам руки")
+        card.pack(fill=tk.X, pady=(0, 8))
+        lbl(card.body, "Жмёт Alt+Y по кругу. Фокус должен быть на окне Zoom.",
+            color=MUTED).pack(anchor=tk.W, pady=(0, 8))
+        self.hand_cd_frame, self.hand_cd_entry = make_cooldown_row(card.body, "0.2")
+        self.hand_cd_frame.pack(anchor=tk.W)
 
-        self.hand_cd_frame, self.hand_cd_entry = make_cooldown_row(tab, "0.2")
-        self.hand_cd_frame.pack(pady=5)
-
+        control = tile(tab, "Управление")
+        control.pack(fill=tk.X)
         self.hand_status, self.hand_status_label, self.hand_start_btn, self.hand_stop_btn = \
-            make_status_and_buttons(tab, self.hand_start, self.hand_stop)
+            make_status_and_buttons(control.body, self.hand_start, self.hand_stop)
 
     def hand_start(self):
         try:
@@ -312,15 +449,15 @@ class ZoomTrollTool:
             cd = 0.2
         self.hand_running = True
         self.hand_status.set("СПАМИМ ✋")
-        self.hand_status_label.config(fg="green")
+        self.hand_status_label.config(fg=OK)
         self.hand_start_btn.config(state=tk.DISABLED)
         self.hand_stop_btn.config(state=tk.NORMAL)
         threading.Thread(target=self._hand_loop, args=(cd,), daemon=True).start()
 
     def hand_stop(self):
         self.hand_running = False
-        self.hand_status.set("Выкл")
-        self.hand_status_label.config(fg="red")
+        self.hand_status.set("ВЫКЛ")
+        self.hand_status_label.config(fg=MUTED)
         self.hand_start_btn.config(state=tk.NORMAL)
         self.hand_stop_btn.config(state=tk.DISABLED)
 
@@ -331,58 +468,61 @@ class ZoomTrollTool:
 
     # ==================== NAME TAB ====================
     def _build_name_tab(self, notebook):
-        tab = tk.Frame(notebook, padx=10, pady=8)
-        notebook.add(tab, text=" 👤 Ник ")
+        tab = self._new_tab(notebook, " 👤 Ник ")
 
         self.name_enabled = tk.BooleanVar(value=True)
-        tk.Checkbutton(tab, text="Включить в 'Запустить всё разом'", variable=self.name_enabled,
-                       font=("Arial", 9)).pack(anchor=tk.W)
+        self._enable_strip(tab, self.name_enabled)
+
+        source = tile(tab, "Источник имён")
+        source.pack(fill=tk.X, pady=(0, 8))
 
         self.name_mode = tk.StringVar(value="manual")
-        mode_f = tk.Frame(tab)
-        mode_f.pack(fill=tk.X, pady=3)
-        tk.Radiobutton(mode_f, text="Ручной список", variable=self.name_mode, value="manual",
-                       font=("Arial", 9), command=self._toggle_name_mode).pack(side=tk.LEFT, padx=5)
-        tk.Radiobutton(mode_f, text="Авто (парсить участников)", variable=self.name_mode, value="auto",
-                       font=("Arial", 9), command=self._toggle_name_mode).pack(side=tk.LEFT, padx=5)
+        mode_f = row(source.body, pady=(0, 6))
+        radio(mode_f, "Ручной список", self.name_mode, "manual",
+              self._toggle_name_mode).pack(side=tk.LEFT)
+        radio(mode_f, "Авто (парсить участников)", self.name_mode, "auto",
+              self._toggle_name_mode).pack(side=tk.LEFT, padx=10)
 
-        self.manual_frame = tk.Frame(tab)
+        self.manual_frame = tk.Frame(source.body, bg=TILE)
         self.manual_frame.pack(fill=tk.X)
-        tk.Label(self.manual_frame, text="Имена (по одному на строку):", font=("Arial", 9)).pack(anchor=tk.W)
-        self.names_text = scrolledtext.ScrolledText(self.manual_frame, width=52, height=4, font=("Arial", 9))
-        self.names_text.pack(pady=2)
+        lbl(self.manual_frame, "Имена, по одному на строку",
+            color=MUTED).pack(anchor=tk.W, pady=(0, 3))
+        self.names_text = text_area(self.manual_frame, height=4)
+        self.names_text.pack(fill=tk.X)
         self.names_text.insert(tk.END, "Иван Петров\nМария Сидорова\nАлексей Козлов")
 
-        self.auto_frame = tk.Frame(tab)
-        tk.Label(self.auto_frame, text="Автопарсинг участников из Zoom", font=("Arial", 9),
-                 fg="#2196F3").pack(anchor=tk.W)
+        self.auto_frame = tk.Frame(source.body, bg=TILE)
+        lbl(self.auto_frame, "Берёт имена прямо из списка участников Zoom",
+            color=MUTED).pack(anchor=tk.W)
         self.participants_var = tk.StringVar(value="Участники: ещё не загружены")
-        tk.Label(self.auto_frame, textvariable=self.participants_var, font=("Arial", 8),
-                 fg="#666").pack(anchor=tk.W)
+        tk.Label(self.auto_frame, textvariable=self.participants_var, bg=TILE, fg=FG,
+                 font=(FONT, 8), wraplength=540, justify=tk.LEFT).pack(anchor=tk.W, pady=3)
 
-        settings_f = tk.Frame(tab)
-        settings_f.pack(fill=tk.X, pady=4)
-        tk.Label(settings_f, text="Chrome Port:", font=("Arial", 9)).pack(side=tk.LEFT)
-        self.name_port = tk.Entry(settings_f, width=6, font=("Arial", 10))
-        self.name_port.pack(side=tk.LEFT, padx=5)
+        conn = tile(tab, "Подключение")
+        conn.pack(fill=tk.X, pady=(0, 8))
+        conn_row = row(conn.body)
+        lbl(conn_row, "Chrome Port", color=MUTED).pack(side=tk.LEFT)
+        self.name_port = ent(conn_row, width=6, mono=True)
+        self.name_port.pack(side=tk.LEFT, padx=6)
         self.name_port.insert(0, "9222")
-        tk.Label(settings_f, text="Кулдаун (сек):", font=("Arial", 9)).pack(side=tk.LEFT, padx=(15, 0))
-        self.name_cd_entry = tk.Entry(settings_f, width=6, font=("Arial", 10))
-        self.name_cd_entry.pack(side=tk.LEFT, padx=5)
+        lbl(conn_row, "Кулдаун (сек)", color=MUTED).pack(side=tk.LEFT, padx=(16, 0))
+        self.name_cd_entry = ent(conn_row, width=6)
+        self.name_cd_entry.pack(side=tk.LEFT, padx=6)
         self.name_cd_entry.insert(0, "1.0")
 
+        control = tile(tab, "Управление")
+        control.pack(fill=tk.X)
         self.name_status, self.name_status_label, self.name_start_btn, self.name_stop_btn = \
-            make_status_and_buttons(tab, self.name_start, self.name_stop, "CONNECT & START")
-        self.name_start_btn.config(bg="#2196F3")
+            make_status_and_buttons(control.body, self.name_start, self.name_stop,
+                                    "CONNECT & START")
 
     def _toggle_name_mode(self):
-        settings = self.name_port.master
         if self.name_mode.get() == "manual":
             self.auto_frame.pack_forget()
-            self.manual_frame.pack(fill=tk.X, before=settings)
+            self.manual_frame.pack(fill=tk.X)
         else:
             self.manual_frame.pack_forget()
-            self.auto_frame.pack(fill=tk.X, before=settings)
+            self.auto_frame.pack(fill=tk.X)
 
     def name_start(self):
         if not SELENIUM_AVAILABLE:
@@ -403,8 +543,8 @@ class ZoomTrollTool:
             cd = 1.0
         port = self.name_port.get().strip()
         self.name_start_btn.config(state=tk.DISABLED)
-        self.name_status.set("Подключаюсь...")
-        self.name_status_label.config(fg="orange")
+        self.name_status.set("ПОДКЛЮЧАЮСЬ...")
+        self.name_status_label.config(fg=WARN)
         threading.Thread(target=self._name_loop, args=(names, port, cd), daemon=True).start()
 
     def _name_loop(self, manual_names, port, cooldown):
@@ -412,7 +552,7 @@ class ZoomTrollTool:
             self._ensure_driver(port)
             self.name_running = True
             self.root.after(0, lambda: self.name_status.set("МЕНЯЕМ ИМЕНА"))
-            self.root.after(0, lambda: self.name_status_label.config(fg="green"))
+            self.root.after(0, lambda: self.name_status_label.config(fg=OK))
             self.root.after(0, lambda: self.name_stop_btn.config(state=tk.NORMAL))
 
             while self.name_running:
@@ -436,46 +576,48 @@ class ZoomTrollTool:
         except Exception as e:
             self.root.after(0, lambda: messagebox.showerror("Ошибка", f"Chrome порт {port}:\n{e}"))
             self.root.after(0, lambda: self.name_start_btn.config(state=tk.NORMAL))
-            self.root.after(0, lambda: self.name_status.set("Ошибка"))
-            self.root.after(0, lambda: self.name_status_label.config(fg="red"))
+            self.root.after(0, lambda: self.name_status.set("ОШИБКА"))
+            self.root.after(0, lambda: self.name_status_label.config(fg=DANGER))
 
     def name_stop(self):
         self.name_running = False
-        self.name_status.set("Выкл")
-        self.name_status_label.config(fg="red")
+        self.name_status.set("ВЫКЛ")
+        self.name_status_label.config(fg=MUTED)
         self.name_start_btn.config(state=tk.NORMAL)
         self.name_stop_btn.config(state=tk.DISABLED)
 
     # ==================== CHAT TAB ====================
     def _build_chat_tab(self, notebook):
-        tab = tk.Frame(notebook, padx=10, pady=10)
-        notebook.add(tab, text=" 💬 Чат ")
+        tab = self._new_tab(notebook, " 💬 Чат ")
 
         self.chat_enabled = tk.BooleanVar(value=True)
-        tk.Checkbutton(tab, text="Включить в 'Запустить всё разом'", variable=self.chat_enabled,
-                       font=("Arial", 9)).pack(anchor=tk.W)
+        self._enable_strip(tab, self.chat_enabled)
 
-        tk.Label(tab, text="Спам сообщений в чат Zoom", font=("Arial", 10)).pack(pady=3)
-
-        tk.Label(tab, text="Текст сообщения:", font=("Arial", 9)).pack(anchor=tk.W, pady=(5, 0))
-        self.chat_text = scrolledtext.ScrolledText(tab, width=52, height=4, font=("Arial", 10))
-        self.chat_text.pack(pady=3)
+        msg = tile(tab, "Сообщение")
+        msg.pack(fill=tk.X, pady=(0, 8))
+        lbl(msg.body, "Этот текст полетит в чат конференции",
+            color=MUTED).pack(anchor=tk.W, pady=(0, 3))
+        self.chat_text = text_area(msg.body, height=4, size=10)
+        self.chat_text.pack(fill=tk.X)
         self.chat_text.insert(tk.END, "ВНИМАНИЕ! ОБЪЯВЛЕНИЕ!")
 
-        settings_f = tk.Frame(tab)
-        settings_f.pack(fill=tk.X, pady=4)
-        tk.Label(settings_f, text="Chrome Port:", font=("Arial", 9)).pack(side=tk.LEFT)
-        self.chat_port = tk.Entry(settings_f, width=6, font=("Arial", 10))
-        self.chat_port.pack(side=tk.LEFT, padx=5)
+        conn = tile(tab, "Подключение")
+        conn.pack(fill=tk.X, pady=(0, 8))
+        conn_row = row(conn.body)
+        lbl(conn_row, "Chrome Port", color=MUTED).pack(side=tk.LEFT)
+        self.chat_port = ent(conn_row, width=6, mono=True)
+        self.chat_port.pack(side=tk.LEFT, padx=6)
         self.chat_port.insert(0, "9222")
-        tk.Label(settings_f, text="Кулдаун (сек):", font=("Arial", 9)).pack(side=tk.LEFT, padx=(15, 0))
-        self.chat_cd_entry = tk.Entry(settings_f, width=6, font=("Arial", 10))
-        self.chat_cd_entry.pack(side=tk.LEFT, padx=5)
+        lbl(conn_row, "Кулдаун (сек)", color=MUTED).pack(side=tk.LEFT, padx=(16, 0))
+        self.chat_cd_entry = ent(conn_row, width=6)
+        self.chat_cd_entry.pack(side=tk.LEFT, padx=6)
         self.chat_cd_entry.insert(0, "2.0")
 
+        control = tile(tab, "Управление")
+        control.pack(fill=tk.X)
         self.chat_status, self.chat_status_label, self.chat_start_btn, self.chat_stop_btn = \
-            make_status_and_buttons(tab, self.chat_start, self.chat_stop, "CONNECT & START")
-        self.chat_start_btn.config(bg="#FF9800")
+            make_status_and_buttons(control.body, self.chat_start, self.chat_stop,
+                                    "CONNECT & START")
 
     def chat_start(self):
         if not SELENIUM_AVAILABLE:
@@ -493,8 +635,8 @@ class ZoomTrollTool:
             cd = 2.0
         port = self.chat_port.get().strip()
         self.chat_start_btn.config(state=tk.DISABLED)
-        self.chat_status.set("Подключаюсь...")
-        self.chat_status_label.config(fg="orange")
+        self.chat_status.set("ПОДКЛЮЧАЮСЬ...")
+        self.chat_status_label.config(fg=WARN)
         threading.Thread(target=self._chat_loop, args=(text, port, cd), daemon=True).start()
 
     def _chat_loop(self, text, port, cooldown):
@@ -502,7 +644,7 @@ class ZoomTrollTool:
             self._ensure_driver(port)
             self.chat_running = True
             self.root.after(0, lambda: self.chat_status.set("СПАМИМ ЧАТ 💬"))
-            self.root.after(0, lambda: self.chat_status_label.config(fg="green"))
+            self.root.after(0, lambda: self.chat_status_label.config(fg=OK))
             self.root.after(0, lambda: self.chat_stop_btn.config(state=tk.NORMAL))
 
             while self.chat_running:
@@ -514,8 +656,8 @@ class ZoomTrollTool:
         except Exception as e:
             self.root.after(0, lambda: messagebox.showerror("Ошибка", f"Chrome порт {port}:\n{e}"))
             self.root.after(0, lambda: self.chat_start_btn.config(state=tk.NORMAL))
-            self.root.after(0, lambda: self.chat_status.set("Ошибка"))
-            self.root.after(0, lambda: self.chat_status_label.config(fg="red"))
+            self.root.after(0, lambda: self.chat_status.set("ОШИБКА"))
+            self.root.after(0, lambda: self.chat_status_label.config(fg=DANGER))
 
     def _send_chat_message(self, text):
         d = self.driver
@@ -566,50 +708,49 @@ class ZoomTrollTool:
 
     def chat_stop(self):
         self.chat_running = False
-        self.chat_status.set("Выкл")
-        self.chat_status_label.config(fg="red")
+        self.chat_status.set("ВЫКЛ")
+        self.chat_status_label.config(fg=MUTED)
         self.chat_start_btn.config(state=tk.NORMAL)
         self.chat_stop_btn.config(state=tk.DISABLED)
 
     # ==================== CLEAN TAB ====================
     def _build_clean_tab(self, notebook):
-        tab = tk.Frame(notebook, padx=10, pady=10)
-        notebook.add(tab, text=" 🧹 Очистка ")
+        tab = self._new_tab(notebook, " 🧹 Очистка ")
 
         self.clean_enabled = tk.BooleanVar(value=True)
-        tk.Checkbutton(tab, text="Включить в 'Запустить всё разом'", variable=self.clean_enabled,
-                       font=("Arial", 9)).pack(anchor=tk.W)
+        self._enable_strip(tab, self.clean_enabled)
 
-        tk.Label(tab, text="Очистка куки + смена IP через Urban VPN", font=("Arial", 10)).pack(pady=3)
-
-        tk.Label(tab, text="ID расширения Urban VPN в Chrome:", font=("Arial", 9)).pack(anchor=tk.W, pady=(5, 0))
-        id_frame = tk.Frame(tab)
-        id_frame.pack(fill=tk.X, pady=2)
-        self.vpn_ext_id = tk.Entry(id_frame, width=40, font=("Arial", 9))
-        self.vpn_ext_id.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        vpn = tile(tab, "Urban VPN")
+        vpn.pack(fill=tk.X, pady=(0, 8))
+        lbl(vpn.body, "Чистит куки и дёргает кнопку подключения в расширении",
+            color=MUTED).pack(anchor=tk.W, pady=(0, 6))
+        lbl(vpn.body, "ID расширения в Chrome", color=MUTED).pack(anchor=tk.W)
+        self.vpn_ext_id = ent(vpn.body, size=9, mono=True)
+        self.vpn_ext_id.pack(fill=tk.X, pady=3)
         self.vpn_ext_id.insert(0, "eppiocemhmnlbhjplcgkofciiegomcon")
+        lbl(vpn.body, "chrome://extensions → ID расширения Urban VPN",
+            size=8, color=MUTED).pack(anchor=tk.W)
 
-        tk.Label(tab, text="(chrome://extensions -> ID расширения Urban VPN)",
-                 font=("Arial", 8), fg="#666").pack(anchor=tk.W)
-
-        settings_f = tk.Frame(tab)
-        settings_f.pack(fill=tk.X, pady=5)
-        tk.Label(settings_f, text="Chrome Port:", font=("Arial", 9)).pack(side=tk.LEFT)
-        self.clean_port = tk.Entry(settings_f, width=6, font=("Arial", 10))
-        self.clean_port.pack(side=tk.LEFT, padx=5)
+        conn = tile(tab, "Подключение")
+        conn.pack(fill=tk.X, pady=(0, 8))
+        conn_row = row(conn.body)
+        lbl(conn_row, "Chrome Port", color=MUTED).pack(side=tk.LEFT)
+        self.clean_port = ent(conn_row, width=6, mono=True)
+        self.clean_port.pack(side=tk.LEFT, padx=6)
         self.clean_port.insert(0, "9222")
-        tk.Label(settings_f, text="Кулдаун (сек):", font=("Arial", 9)).pack(side=tk.LEFT, padx=(15, 0))
-        self.clean_cd_entry = tk.Entry(settings_f, width=6, font=("Arial", 10))
-        self.clean_cd_entry.pack(side=tk.LEFT, padx=5)
+        lbl(conn_row, "Кулдаун (сек)", color=MUTED).pack(side=tk.LEFT, padx=(16, 0))
+        self.clean_cd_entry = ent(conn_row, width=6)
+        self.clean_cd_entry.pack(side=tk.LEFT, padx=6)
         self.clean_cd_entry.insert(0, "30")
 
+        control = tile(tab, "Управление")
+        control.pack(fill=tk.X)
         self.clean_status, self.clean_status_label, self.clean_start_btn, self.clean_stop_btn = \
-            make_status_and_buttons(tab, self.clean_start, self.clean_stop, "CONNECT & START")
-        self.clean_start_btn.config(bg="#795548")
-
+            make_status_and_buttons(control.body, self.clean_start, self.clean_stop,
+                                    "CONNECT & START")
         self.clean_log_var = tk.StringVar(value="")
-        tk.Label(tab, textvariable=self.clean_log_var, font=("Arial", 8), fg="#666",
-                 wraplength=450, justify=tk.LEFT).pack(anchor=tk.W, pady=(3, 0))
+        tk.Label(control.body, textvariable=self.clean_log_var, bg=TILE, fg=MUTED,
+                 font=(FONT, 8), wraplength=520, justify=tk.LEFT).pack(anchor=tk.W, pady=(8, 0))
 
     def clean_start(self):
         if not SELENIUM_AVAILABLE:
@@ -624,8 +765,8 @@ class ZoomTrollTool:
         port = self.clean_port.get().strip()
         ext_id = self.vpn_ext_id.get().strip()
         self.clean_start_btn.config(state=tk.DISABLED)
-        self.clean_status.set("Подключаюсь...")
-        self.clean_status_label.config(fg="orange")
+        self.clean_status.set("ПОДКЛЮЧАЮСЬ...")
+        self.clean_status_label.config(fg=WARN)
         threading.Thread(target=self._clean_loop, args=(port, cd, ext_id), daemon=True).start()
 
     def _clean_loop(self, port, cooldown, ext_id):
@@ -641,7 +782,7 @@ class ZoomTrollTool:
             self._ensure_driver(port)
             self.clean_running = True
             self.root.after(0, lambda: self.clean_status.set("ЧИСТИМ + VPN"))
-            self.root.after(0, lambda: self.clean_status_label.config(fg="green"))
+            self.root.after(0, lambda: self.clean_status_label.config(fg=OK))
             self.root.after(0, lambda: self.clean_stop_btn.config(state=tk.NORMAL))
 
             while self.clean_running:
@@ -664,9 +805,9 @@ class ZoomTrollTool:
                     clicked = False
                     for sel in btn_selectors:
                         try:
-                            btn = self.driver.find_element(By.CSS_SELECTOR, sel)
-                            if btn.is_displayed():
-                                btn.click()
+                            found = self.driver.find_element(By.CSS_SELECTOR, sel)
+                            if found.is_displayed():
+                                found.click()
                                 clicked = True
                                 self.root.after(0, lambda: self.clean_log_var.set(
                                     "VPN: нажал кнопку подключения"))
@@ -694,9 +835,9 @@ class ZoomTrollTool:
 
                     for sel in btn_selectors:
                         try:
-                            btn = self.driver.find_element(By.CSS_SELECTOR, sel)
-                            if btn.is_displayed():
-                                btn.click()
+                            found = self.driver.find_element(By.CSS_SELECTOR, sel)
+                            if found.is_displayed():
+                                found.click()
                                 self.root.after(0, lambda: self.clean_log_var.set(
                                     "VPN: переподключение к новому серверу"))
                                 break
@@ -713,92 +854,79 @@ class ZoomTrollTool:
         except Exception as e:
             self.root.after(0, lambda: messagebox.showerror("Ошибка", f"Chrome порт {port}:\n{e}"))
             self.root.after(0, lambda: self.clean_start_btn.config(state=tk.NORMAL))
-            self.root.after(0, lambda: self.clean_status.set("Ошибка"))
-            self.root.after(0, lambda: self.clean_status_label.config(fg="red"))
+            self.root.after(0, lambda: self.clean_status.set("ОШИБКА"))
+            self.root.after(0, lambda: self.clean_status_label.config(fg=DANGER))
 
     def clean_stop(self):
         self.clean_running = False
-        self.clean_status.set("Выкл")
-        self.clean_status_label.config(fg="red")
+        self.clean_status.set("ВЫКЛ")
+        self.clean_status_label.config(fg=MUTED)
         self.clean_start_btn.config(state=tk.NORMAL)
         self.clean_stop_btn.config(state=tk.DISABLED)
 
     # ==================== SOUNDPAD TAB (embedded real app) ====================
     def _build_soundpad_tab(self, notebook):
-        tab = tk.Frame(notebook, padx=8, pady=6)
-        notebook.add(tab, text=" 🎚 Soundpad ")
+        tab = self._new_tab(notebook, " 🎚 Soundpad ")
 
         self.spad_enabled = tk.BooleanVar(value=True)
-        tk.Checkbutton(tab, text="Включить в 'Запустить всё разом'", variable=self.spad_enabled,
-                       font=("Arial", 9)).pack(anchor=tk.W)
+        self._enable_strip(tab, self.spad_enabled)
 
-        path_f = tk.Frame(tab)
-        path_f.pack(fill=tk.X, pady=(2, 0))
-        tk.Label(path_f, text="Soundpad.exe:", font=("Arial", 9)).pack(side=tk.LEFT)
-        self.spad_path = tk.Entry(path_f, font=("Arial", 8))
-        self.spad_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+        prog = tile(tab, "Программа")
+        prog.pack(fill=tk.X, pady=(0, 8))
+        path_f = row(prog.body)
+        lbl(path_f, "Soundpad.exe", color=MUTED).pack(side=tk.LEFT)
+        self.spad_path = ent(path_f, size=8, mono=True)
+        self.spad_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
         self.spad_path.insert(0, next((p for p in SOUNDPAD_EXE_CANDIDATES if os.path.isfile(p)),
                                       SOUNDPAD_EXE_CANDIDATES[0]))
-        tk.Button(path_f, text="Обзор", font=("Arial", 8, "bold"), bg="#009688", fg="white",
-                  command=self.spad_pick_exe).pack(side=tk.LEFT)
+        btn(path_f, "Обзор", self.spad_pick_exe, size=8).pack(side=tk.LEFT)
 
-        attach_f = tk.Frame(tab)
-        attach_f.pack(fill=tk.X, pady=3)
-        tk.Button(attach_f, text="Втащить Soundpad внутрь", font=("Arial", 9, "bold"),
-                  bg="#3F51B5", fg="white", command=self.spad_attach).pack(side=tk.LEFT)
-        tk.Button(attach_f, text="Отцепить", font=("Arial", 9, "bold"),
-                  bg="#607D8B", fg="white", command=self.spad_detach).pack(side=tk.LEFT, padx=4)
+        attach_f = row(prog.body, pady=(7, 0))
+        btn(attach_f, "Втащить Soundpad внутрь", self.spad_attach).pack(side=tk.LEFT)
+        btn(attach_f, "Отцепить", self.spad_detach, color=MUTED).pack(side=tk.LEFT, padx=5)
 
         self.spad_embed_var = tk.StringVar(value="Soundpad не встроен")
-        tk.Label(tab, textvariable=self.spad_embed_var, font=("Arial", 8),
-                 fg="#666").pack(anchor=tk.W)
+        tk.Label(prog.body, textvariable=self.spad_embed_var, bg=TILE, fg=MUTED,
+                 font=(FONT, 8)).pack(anchor=tk.W, pady=(6, 0))
 
-        self.spad_container = tk.Frame(tab, bg="#1a1a1a", height=260,
-                                       highlightthickness=1, highlightbackground="#888")
-        self.spad_container.pack(fill=tk.BOTH, expand=True, pady=3)
+        frame = tk.Frame(tab, bg=EDGE)
+        frame.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        self.spad_container = tk.Frame(frame, bg="#000000", height=150)
+        self.spad_container.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
         self.spad_container.pack_propagate(False)
         self.spad_container.bind("<Configure>", self._on_spad_resize)
 
-        ttk.Separator(tab, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=4)
-        tk.Label(tab, text="Автоматика (через Remote Control)",
-                 font=("Arial", 9, "bold")).pack(anchor=tk.W)
-
-        load_f = tk.Frame(tab)
-        load_f.pack(fill=tk.X, pady=2)
-        tk.Button(load_f, text="Загрузить список", font=("Arial", 9, "bold"),
-                  bg="#009688", fg="white", command=self.spad_load_list).pack(side=tk.LEFT)
+        auto = tile(tab, "Автоматика (через Remote Control)")
+        auto.pack(fill=tk.X, pady=(0, 8))
+        load_f = row(auto.body)
+        btn(load_f, "Загрузить список", self.spad_load_list, size=8).pack(side=tk.LEFT)
         self.spad_count_var = tk.StringVar(value="список не загружен")
-        tk.Label(load_f, textvariable=self.spad_count_var, font=("Arial", 8),
-                 fg="#666").pack(side=tk.LEFT, padx=8)
+        tk.Label(load_f, textvariable=self.spad_count_var, bg=TILE, fg=MUTED,
+                 font=(FONT, 8)).pack(side=tk.LEFT, padx=8)
 
         self.spad_mode = tk.StringVar(value="random")
-        mode_f = tk.Frame(tab)
-        mode_f.pack(fill=tk.X)
-        tk.Radiobutton(mode_f, text="Случайный трек", variable=self.spad_mode, value="random",
-                       font=("Arial", 9)).pack(side=tk.LEFT)
-        tk.Radiobutton(mode_f, text="Один на постоянке", variable=self.spad_mode, value="fixed",
-                       font=("Arial", 9)).pack(side=tk.LEFT, padx=6)
+        mode_f = row(auto.body, pady=(6, 0))
+        radio(mode_f, "Случайный трек", self.spad_mode, "random").pack(side=tk.LEFT)
+        radio(mode_f, "Один на постоянке", self.spad_mode, "fixed").pack(side=tk.LEFT, padx=10)
 
-        self.spad_combo = ttk.Combobox(tab, state="readonly", font=("Arial", 8))
-        self.spad_combo.pack(fill=tk.X, pady=2)
+        self.spad_combo = ttk.Combobox(auto.body, state="readonly", font=(FONT, 8))
+        self.spad_combo.pack(fill=tk.X, pady=5)
 
-        opts_f = tk.Frame(tab)
-        opts_f.pack(fill=tk.X)
+        opts_f = row(auto.body)
         self.spad_interrupt = tk.BooleanVar(value=True)
-        tk.Checkbutton(opts_f, text="Обрывать предыдущий", variable=self.spad_interrupt,
-                       font=("Arial", 9)).pack(side=tk.LEFT)
-        tk.Label(opts_f, text="Кулдаун (сек):", font=("Arial", 9)).pack(side=tk.LEFT, padx=(10, 0))
-        self.spad_cd_entry = tk.Entry(opts_f, width=6, font=("Arial", 10))
-        self.spad_cd_entry.pack(side=tk.LEFT, padx=4)
+        check(opts_f, "Обрывать предыдущий", self.spad_interrupt).pack(side=tk.LEFT)
+        lbl(opts_f, "Кулдаун (сек)", color=MUTED).pack(side=tk.LEFT, padx=(14, 0))
+        self.spad_cd_entry = ent(opts_f, width=6)
+        self.spad_cd_entry.pack(side=tk.LEFT, padx=6)
         self.spad_cd_entry.insert(0, "5.0")
 
+        control = tile(tab, "Управление")
+        control.pack(fill=tk.X)
         self.spad_status, self.spad_status_label, self.spad_start_btn, self.spad_stop_btn = \
-            make_status_and_buttons(tab, self.spad_start, self.spad_stop)
-        self.spad_start_btn.config(bg="#E91E63")
-
+            make_status_and_buttons(control.body, self.spad_start, self.spad_stop)
         self.spad_log_var = tk.StringVar(value="")
-        tk.Label(tab, textvariable=self.spad_log_var, font=("Arial", 8), fg="#666",
-                 wraplength=600, justify=tk.LEFT).pack(anchor=tk.W)
+        tk.Label(control.body, textvariable=self.spad_log_var, bg=TILE, fg=MUTED,
+                 font=(FONT, 8), wraplength=560, justify=tk.LEFT).pack(anchor=tk.W, pady=(8, 0))
 
     def _on_spad_resize(self, event):
         self.embedder.resize(event.width, event.height)
@@ -903,8 +1031,8 @@ class ZoomTrollTool:
             fixed_index = self.spad_list[pos][0]
 
         self.spad_start_btn.config(state=tk.DISABLED)
-        self.spad_status.set("Проверяю Soundpad...")
-        self.spad_status_label.config(fg="orange")
+        self.spad_status.set("ПРОВЕРЯЮ SOUNDPAD...")
+        self.spad_status_label.config(fg=WARN)
         threading.Thread(target=self._spad_loop, args=(fixed_index, cd), daemon=True).start()
 
     def _spad_loop(self, fixed_index, cooldown):
@@ -914,13 +1042,13 @@ class ZoomTrollTool:
                 "Soundpad не отвечает. Запусти его и включи:\n"
                 "Settings -> Remote control -> Allow remote control"))
             self.root.after(0, lambda: self.spad_start_btn.config(state=tk.NORMAL))
-            self.root.after(0, lambda: self.spad_status.set("Ошибка"))
-            self.root.after(0, lambda: self.spad_status_label.config(fg="red"))
+            self.root.after(0, lambda: self.spad_status.set("ОШИБКА"))
+            self.root.after(0, lambda: self.spad_status_label.config(fg=DANGER))
             return
 
         self.spad_running = True
         self.root.after(0, lambda: self.spad_status.set("КРУТИМ ЗВУК 🎚"))
-        self.root.after(0, lambda: self.spad_status_label.config(fg="green"))
+        self.root.after(0, lambda: self.spad_status_label.config(fg=OK))
         self.root.after(0, lambda: self.spad_stop_btn.config(state=tk.NORMAL))
 
         while self.spad_running:
@@ -948,8 +1076,8 @@ class ZoomTrollTool:
             SoundpadRemote.stop()
         except Exception:
             pass
-        self.spad_status.set("Выкл")
-        self.spad_status_label.config(fg="red")
+        self.spad_status.set("ВЫКЛ")
+        self.spad_status_label.config(fg=MUTED)
         self.spad_start_btn.config(state=tk.NORMAL)
         self.spad_stop_btn.config(state=tk.DISABLED)
 
@@ -1035,16 +1163,16 @@ class ZoomTrollTool:
                 '//*[contains(text(),"(Me)") or contains(text(),"(Я)") or contains(text(),"(me)")]')
             if not me_items:
                 return
-            row = me_items[0]
+            target = me_items[0]
             for _ in range(5):
-                row = row.find_element(By.XPATH, "..")
-                if "participant" in (row.get_attribute("class") or "").lower():
+                target = target.find_element(By.XPATH, "..")
+                if "participant" in (target.get_attribute("class") or "").lower():
                     break
 
-            ActionChains(d).move_to_element(row).perform()
+            ActionChains(d).move_to_element(target).perform()
             time.sleep(0.3)
 
-            row.find_element(By.CSS_SELECTOR,
+            target.find_element(By.CSS_SELECTOR,
                 '[aria-label*="More"], [aria-label*="ещё"], [aria-label*="Ещё"], '
                 'button.more-button, [data-testid="more-button"], '
                 '.participants-item__buttons button').click()
@@ -1114,5 +1242,5 @@ class ZoomTrollTool:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    ZoomTrollTool(root)
+    ZoomWar(root)
     root.mainloop()
