@@ -10,22 +10,17 @@ if %errorlevel% neq 0 (
 )
 
 echo Ustanovka zavisimostej...
-pip install pyautogui selenium webdriver-manager sounddevice soundfile numpy pyinstaller
+pip install pyautogui selenium webdriver-manager pyinstaller
 
 echo.
 echo Sborka EXE...
-pyinstaller --onefile --windowed --name "ZoomTrollTool" ^
-    --collect-all sounddevice ^
-    --collect-all soundfile ^
-    zoom_hand_spammer.py
+pyinstaller --onefile --windowed --name "ZoomTrollTool" zoom_hand_spammer.py
 
 echo.
 echo === GOTOVO! ===
 echo EXE lezit v papke: dist\ZoomTrollTool.exe
 echo.
-echo VAZNO: dlja zvuka v Zoom postav VB-CABLE:
-echo   https://vb-audio.com/Cable/
-echo   Vyhod v programme = CABLE Input
-echo   Mikrofon v Zoom   = CABLE Output
+echo VAZNO: v Soundpad vkljuchi Remote control:
+echo   Settings -^> Remote control -^> Allow remote control
 echo.
 pause

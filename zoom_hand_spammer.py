@@ -6,14 +6,14 @@ Five tabs:
 2) Name Changer     - manual list or auto-scrape
 3) Chat Spam        - send a message to Zoom chat on a cooldown
 4) Cleanup          - clear cookies + toggle Urban VPN
-5) Soundpad         - built-in soundboard, random or single track on repeat
+5) Soundpad         - embeds the installed Soundpad and drives it
 
 Requirements:
-    pip install pyautogui selenium webdriver-manager sounddevice soundfile numpy
+    pip install pyautogui selenium webdriver-manager
 
-To get the soundboard into Zoom as your microphone, install a virtual
-audio cable (VB-CABLE), point this app's output at "CABLE Input" and set
-Zoom's microphone to "CABLE Output".
+The Soundpad tab needs Soundpad installed, with "Allow remote control"
+enabled under Settings -> Remote control. Routing its output into Zoom
+is set up inside Soundpad itself.
 """
 
 import os
@@ -45,18 +45,6 @@ try:
     SELENIUM_AVAILABLE = True
 except ImportError:
     pass
-
-AUDIO_AVAILABLE = False
-try:
-    import numpy as np
-    import sounddevice as sd
-    import soundfile as sf
-    AUDIO_AVAILABLE = True
-except ImportError:
-    pass
-
-AUDIO_EXTS = (".wav", ".mp3", ".ogg", ".flac", ".aiff", ".aif", ".opus")
-VIRTUAL_HINTS = ("cable", "voicemeeter", "virtual", "vb-audio")
 
 IS_WINDOWS = sys.platform == "win32"
 
@@ -225,90 +213,6 @@ class WindowEmbedder:
         self.original_style = None
 
 
-def _to_stereo(block):
-    if block.shape[1] == 1:
-        return np.repeat(block, 2, axis=1)
-    if block.shape[1] > 2:
-        return block[:, :2]
-    return block
-
-
-def _resample(block, ratio):
-    n_out = max(1, int(round(block.shape[0] * ratio)))
-    x_old = np.linspace(0.0, 1.0, block.shape[0], endpoint=False)
-    x_new = np.linspace(0.0, 1.0, n_out, endpoint=False)
-    cols = [np.interp(x_new, x_old, block[:, c]) for c in range(block.shape[1])]
-    return np.stack(cols, axis=1).astype(np.float32)
-
-
-class SoundEngine:
-    """Streams an audio file to one or more output devices at once."""
-
-    BLOCK = 2048
-
-    def __init__(self):
-        self.volume = 0.8
-        self._voices = []
-        self._lock = threading.RLock()
-
-    @staticmethod
-    def output_devices():
-        if not AUDIO_AVAILABLE:
-            return []
-        found = []
-        for idx, dev in enumerate(sd.query_devices()):
-            if dev["max_output_channels"] > 0:
-                found.append((idx, dev["name"]))
-        return found
-
-    def stop(self):
-        with self._lock:
-            voices = list(self._voices)
-            self._voices = []
-        for _thread, event in voices:
-            event.set()
-        for thread, _event in voices:
-            thread.join(timeout=1.0)
-
-    def play(self, path, devices, exclusive=True):
-        if exclusive:
-            self.stop()
-        event = threading.Event()
-        started = []
-        for dev in devices:
-            thread = threading.Thread(target=self._worker, args=(path, dev, event), daemon=True)
-            thread.start()
-            started.append((thread, event))
-        with self._lock:
-            self._voices = [v for v in self._voices if v[0].is_alive()] + started
-
-    def _open_stream(self, device, file_rate):
-        try:
-            return sd.OutputStream(device=device, samplerate=file_rate,
-                                   channels=2, dtype="float32"), file_rate
-        except Exception:
-            rate = int(sd.query_devices(device)["default_samplerate"])
-            return sd.OutputStream(device=device, samplerate=rate,
-                                   channels=2, dtype="float32"), rate
-
-    def _worker(self, path, device, stop_evt):
-        try:
-            with sf.SoundFile(path) as handle:
-                stream, rate = self._open_stream(device, handle.samplerate)
-                ratio = rate / handle.samplerate
-                with stream:
-                    while not stop_evt.is_set():
-                        block = handle.read(self.BLOCK, dtype="float32", always_2d=True)
-                        if block.shape[0] == 0:
-                            break
-                        block = _to_stereo(block)
-                        if ratio != 1.0:
-                            block = _resample(block, ratio)
-                        stream.write(np.clip(block * self.volume, -1.0, 1.0))
-        except Exception:
-            pass
-
-
 def make_cooldown_row(parent, default="1.0"):
     frame = tk.Frame(parent)
     tk.Label(frame, text="Кулдаун (сек):", font=("Arial", 9)).pack(side=tk.LEFT)
@@ -345,12 +249,9 @@ class ZoomTrollTool:
         self.name_running = False
         self.chat_running = False
         self.clean_running = False
-        self.sound_running = False
         self.spad_running = False
         self.driver = None
-        self.sound_list = []
         self.spad_list = []
-        self.sound_engine = SoundEngine()
         self.embedder = WindowEmbedder()
 
         tk.Label(root, text="ZOOM TROLL TOOL", font=("Arial", 16, "bold")).pack(pady=6)
@@ -363,7 +264,6 @@ class ZoomTrollTool:
         self._build_chat_tab(notebook)
         self._build_clean_tab(notebook)
         self._build_soundpad_tab(notebook)
-        self._build_sound_tab(notebook)
 
         full_frame = tk.Frame(root)
         full_frame.pack(fill=tk.X, padx=8, pady=(2, 0))
@@ -381,8 +281,7 @@ class ZoomTrollTool:
         tk.Label(info, text=(
             "Рука: фокус на Zoom, жми START. Ник/Чат/Очистка: запусти Chrome с флагом\n"
             "chrome.exe --remote-debugging-port=9222, зайди на app.zoom.us\n"
-            "Soundpad: жми 'Втащить Soundpad внутрь' + включи в нём Remote control\n"
-            "Плеер/Soundpad: микрофон в Zoom = CABLE Output (нужен VB-CABLE)"
+            "Soundpad: жми 'Втащить Soundpad внутрь' + включи в нём Remote control"
         ), font=("Arial", 8), justify=tk.LEFT).pack(anchor=tk.W)
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -1054,226 +953,6 @@ class ZoomTrollTool:
         self.spad_start_btn.config(state=tk.NORMAL)
         self.spad_stop_btn.config(state=tk.DISABLED)
 
-    # ==================== PLAYER TAB (built-in engine) ====================
-    def _build_sound_tab(self, notebook):
-        tab = tk.Frame(notebook, padx=10, pady=6)
-        notebook.add(tab, text=" 🎵 Плеер ")
-
-        self.sound_enabled = tk.BooleanVar(value=True)
-        tk.Checkbutton(tab, text="Включить в 'Запустить всё разом'", variable=self.sound_enabled,
-                       font=("Arial", 9)).pack(anchor=tk.W)
-
-        folder_f = tk.Frame(tab)
-        folder_f.pack(fill=tk.X, pady=(2, 0))
-        tk.Label(folder_f, text="Папка:", font=("Arial", 9)).pack(side=tk.LEFT)
-        self.sound_folder = tk.Entry(folder_f, font=("Arial", 9))
-        self.sound_folder.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
-        tk.Button(folder_f, text="Обзор", font=("Arial", 8, "bold"), bg="#009688", fg="white",
-                  command=self.sound_pick_folder).pack(side=tk.LEFT)
-
-        self.sound_count_var = tk.StringVar(value="папка не выбрана")
-        tk.Label(tab, textvariable=self.sound_count_var, font=("Arial", 8),
-                 fg="#666").pack(anchor=tk.W)
-
-        list_f = tk.Frame(tab)
-        list_f.pack(fill=tk.BOTH, expand=True, pady=2)
-        scroll = tk.Scrollbar(list_f, orient=tk.VERTICAL)
-        scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.sound_listbox = tk.Listbox(list_f, height=6, font=("Arial", 9),
-                                        yscrollcommand=scroll.set, exportselection=False)
-        self.sound_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.sound_listbox.bind("<Double-Button-1>", lambda _e: self.sound_play_selected())
-        scroll.config(command=self.sound_listbox.yview)
-
-        manual_f = tk.Frame(tab)
-        manual_f.pack(fill=tk.X, pady=2)
-        tk.Button(manual_f, text="▶ Играть выбранный", font=("Arial", 9, "bold"),
-                  bg="#607D8B", fg="white", command=self.sound_play_selected).pack(side=tk.LEFT)
-        tk.Button(manual_f, text="■ Тишина", font=("Arial", 9, "bold"),
-                  bg="#607D8B", fg="white", command=self.sound_silence).pack(side=tk.LEFT, padx=4)
-
-        dev_f = tk.Frame(tab)
-        dev_f.pack(fill=tk.X, pady=(4, 0))
-        tk.Label(dev_f, text="Выход в Zoom:", font=("Arial", 9)).pack(anchor=tk.W)
-        self.zoom_dev_combo = ttk.Combobox(dev_f, state="readonly", font=("Arial", 8))
-        self.zoom_dev_combo.pack(fill=tk.X, pady=1)
-
-        mon_f = tk.Frame(tab)
-        mon_f.pack(fill=tk.X)
-        self.sound_monitor = tk.BooleanVar(value=False)
-        tk.Checkbutton(mon_f, text="Дублировать себе в наушники:", variable=self.sound_monitor,
-                       font=("Arial", 9)).pack(anchor=tk.W)
-        self.monitor_dev_combo = ttk.Combobox(mon_f, state="readonly", font=("Arial", 8))
-        self.monitor_dev_combo.pack(fill=tk.X, pady=1)
-
-        vol_f = tk.Frame(tab)
-        vol_f.pack(fill=tk.X, pady=(2, 0))
-        tk.Label(vol_f, text="Громкость:", font=("Arial", 9)).pack(side=tk.LEFT)
-        self.sound_volume = tk.Scale(vol_f, from_=0, to=100, orient=tk.HORIZONTAL,
-                                     showvalue=True, command=self._on_volume_change)
-        self.sound_volume.set(80)
-        self.sound_volume.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-        self.sound_mode = tk.StringVar(value="random")
-        mode_f = tk.Frame(tab)
-        mode_f.pack(fill=tk.X)
-        tk.Radiobutton(mode_f, text="Случайный трек", variable=self.sound_mode, value="random",
-                       font=("Arial", 9)).pack(side=tk.LEFT)
-        tk.Radiobutton(mode_f, text="Выбранный на постоянке", variable=self.sound_mode,
-                       value="fixed", font=("Arial", 9)).pack(side=tk.LEFT, padx=6)
-
-        self.sound_interrupt = tk.BooleanVar(value=True)
-        tk.Checkbutton(tab, text="Обрывать предыдущий трек перед новым",
-                       variable=self.sound_interrupt, font=("Arial", 9)).pack(anchor=tk.W)
-
-        self.sound_cd_frame, self.sound_cd_entry = make_cooldown_row(tab, "5.0")
-        self.sound_cd_frame.pack(anchor=tk.W, pady=2)
-
-        self.sound_status, self.sound_status_label, self.sound_start_btn, self.sound_stop_btn = \
-            make_status_and_buttons(tab, self.sound_start, self.sound_stop)
-        self.sound_start_btn.config(bg="#E91E63")
-
-        self.sound_log_var = tk.StringVar(value="")
-        tk.Label(tab, textvariable=self.sound_log_var, font=("Arial", 8), fg="#666",
-                 wraplength=460, justify=tk.LEFT).pack(anchor=tk.W)
-
-        self._load_audio_devices()
-
-    def _load_audio_devices(self):
-        if not AUDIO_AVAILABLE:
-            self.sound_log_var.set("Нет аудиодвижка: pip install sounddevice soundfile numpy")
-            return
-        devices = SoundEngine.output_devices()
-        if not devices:
-            self.sound_log_var.set("Не найдено ни одного устройства вывода")
-            return
-        labels = [f"{idx}: {name}" for idx, name in devices]
-        self.zoom_dev_combo.config(values=labels)
-        self.monitor_dev_combo.config(values=labels)
-
-        virtual = next((i for i, (_, name) in enumerate(devices)
-                        if any(h in name.lower() for h in VIRTUAL_HINTS)), None)
-        self.zoom_dev_combo.current(virtual if virtual is not None else 0)
-        self.monitor_dev_combo.current(0)
-        if virtual is None:
-            self.sound_log_var.set("Виртуальный кабель не найден — поставь VB-CABLE, "
-                                   "иначе в Zoom звук не уйдёт")
-
-    def _on_volume_change(self, value):
-        self.sound_engine.volume = int(value) / 100.0
-
-    def _selected_devices(self):
-        devices = []
-        zoom_label = self.zoom_dev_combo.get()
-        if zoom_label:
-            devices.append(int(zoom_label.split(":", 1)[0]))
-        if self.sound_monitor.get():
-            mon_label = self.monitor_dev_combo.get()
-            if mon_label:
-                mon_idx = int(mon_label.split(":", 1)[0])
-                if mon_idx not in devices:
-                    devices.append(mon_idx)
-        return devices
-
-    def sound_pick_folder(self):
-        folder = filedialog.askdirectory(title="Папка со звуками")
-        if not folder:
-            return
-        self.sound_folder.delete(0, tk.END)
-        self.sound_folder.insert(0, folder)
-        self.sound_scan_folder()
-
-    def sound_scan_folder(self):
-        folder = self.sound_folder.get().strip()
-        if not os.path.isdir(folder):
-            self.sound_count_var.set("папка не найдена")
-            return
-        found = []
-        for dirpath, _dirnames, filenames in os.walk(folder):
-            for name in sorted(filenames):
-                if name.lower().endswith(AUDIO_EXTS):
-                    found.append(os.path.join(dirpath, name))
-        self.sound_list = found
-        self.sound_listbox.delete(0, tk.END)
-        for path in found:
-            self.sound_listbox.insert(tk.END, os.path.basename(path))
-        self.sound_count_var.set(f"треков: {len(found)}")
-        if found:
-            self.sound_listbox.selection_set(0)
-
-    def sound_play_selected(self):
-        if not self._require_audio():
-            return
-        picks = self.sound_listbox.curselection()
-        if not picks:
-            messagebox.showwarning("Не выбран трек", "Выбери трек в списке")
-            return
-        self._play_path(self.sound_list[picks[0]])
-
-    def sound_silence(self):
-        self.sound_engine.stop()
-        self.sound_log_var.set("Тишина")
-
-    def _require_audio(self):
-        if not AUDIO_AVAILABLE:
-            messagebox.showerror("Нет аудиодвижка",
-                                 "pip install sounddevice soundfile numpy")
-            return False
-        if not self.sound_list:
-            messagebox.showwarning("Нет треков", "Выбери папку со звуками")
-            return False
-        if not self._selected_devices():
-            messagebox.showwarning("Нет устройства", "Выбери устройство вывода")
-            return False
-        return True
-
-    def _play_path(self, path, exclusive=True):
-        self.sound_engine.play(path, self._selected_devices(), exclusive=exclusive)
-        name = os.path.basename(path)
-        self.root.after(0, lambda: self.sound_log_var.set(f"Играет: {name}"))
-
-    def sound_start(self):
-        if not self._require_audio():
-            return
-        try:
-            cd = float(self.sound_cd_entry.get())
-            if cd < 0.5:
-                cd = 0.5
-        except ValueError:
-            cd = 5.0
-
-        fixed_path = None
-        if self.sound_mode.get() == "fixed":
-            picks = self.sound_listbox.curselection()
-            if not picks:
-                messagebox.showwarning("Не выбран трек", "Выбери трек в списке")
-                return
-            fixed_path = self.sound_list[picks[0]]
-
-        self.sound_running = True
-        self.sound_status.set("КРУТИМ ЗВУК 🔊")
-        self.sound_status_label.config(fg="green")
-        self.sound_start_btn.config(state=tk.DISABLED)
-        self.sound_stop_btn.config(state=tk.NORMAL)
-        threading.Thread(target=self._sound_loop, args=(fixed_path, cd), daemon=True).start()
-
-    def _sound_loop(self, fixed_path, cooldown):
-        while self.sound_running:
-            try:
-                path = fixed_path if fixed_path else random.choice(self.sound_list)
-                self._play_path(path, exclusive=self.sound_interrupt.get())
-            except Exception as e:
-                self.root.after(0, lambda err=e: self.sound_log_var.set(f"Ошибка: {err}"))
-            time.sleep(cooldown)
-
-    def sound_stop(self):
-        self.sound_running = False
-        self.sound_engine.stop()
-        self.sound_status.set("Выкл")
-        self.sound_status_label.config(fg="red")
-        self.sound_start_btn.config(state=tk.NORMAL)
-        self.sound_stop_btn.config(state=tk.DISABLED)
-
     # ==================== SHARED ====================
     def _ensure_driver(self, port):
         if self.driver:
@@ -1407,8 +1086,6 @@ class ZoomTrollTool:
             self.clean_start()
         if self.spad_enabled.get() and not self.spad_running:
             self.spad_start()
-        if self.sound_enabled.get() and not self.sound_running:
-            self.sound_start()
 
     def stop_all(self):
         self.hand_stop()
@@ -1416,7 +1093,6 @@ class ZoomTrollTool:
         self.chat_stop()
         self.clean_stop()
         self.spad_stop()
-        self.sound_stop()
         self.full_btn.config(state=tk.NORMAL)
         self.full_stop_btn.config(state=tk.DISABLED)
 
@@ -1425,9 +1101,7 @@ class ZoomTrollTool:
         self.name_running = False
         self.chat_running = False
         self.clean_running = False
-        self.sound_running = False
         self.spad_running = False
-        self.sound_engine.stop()
         # Hand Soundpad back its window, or it dies with this one.
         self.embedder.detach()
         if self.driver:
