@@ -1,4 +1,4 @@
-import { ATTRIBUTION, VECTOR_SOURCE, overlayLayers, rasterStyle, vectorStyle } from './map-style.js?v=7';
+import { ATTRIBUTION, VECTOR_SOURCE, overlayLayers, rasterStyle, vectorStyle } from './map-style.js?v=8';
 
 const MAPLIBRE_URL = 'https://cdn.jsdelivr.net/npm/maplibre-gl@6.11.2/dist/maplibre-gl.mjs';
 const STORAGE_KEY = 'dostavka:v1';
@@ -132,7 +132,7 @@ function isMarkers(m) {
 }
 
 function isView(v) {
-  return Boolean(v) && isLngLat(v.center) && Number.isFinite(v.zoom);
+  return Boolean(v) && isLngLat(v.center) && Number.isFinite(v.zoom) && (v.bearing == null || Number.isFinite(v.bearing));
 }
 
 /* ---------- Панель с заказом ---------- */
@@ -416,13 +416,14 @@ async function initMap() {
       style: withOverlays(vectorStyle()),
       center: state.view.center,
       zoom: state.view.zoom,
+      bearing: state.view.bearing ?? 0,
       minZoom: 3,
       maxZoom: 19,
       maxPitch: 0,
       attributionControl: false,
-      // Карту можно двигать и масштабировать, но не поворачивать и не наклонять.
+      // Карту можно двигать, масштабировать и поворачивать (двумя пальцами), но не наклонять.
       dragPan: true,
-      dragRotate: false,
+      dragRotate: true,
       pitchWithRotate: false,
       touchPitch: false,
       keyboard: false,
@@ -436,7 +437,6 @@ async function initMap() {
     toast('Этот браузер не может показать карту');
     return;
   }
-  map.touchZoomRotate.disableRotation();
 
   const pinMarker = new maplibregl.Marker({ element: pin, anchor: 'bottom' });
 
@@ -460,7 +460,11 @@ async function initMap() {
 
   map.on('moveend', () => {
     const { lng, lat } = map.getCenter();
-    state.view = { center: [round6(lng), round6(lat)], zoom: Math.round(map.getZoom() * 1000) / 1000 };
+    state.view = {
+      center: [round6(lng), round6(lat)],
+      zoom: Math.round(map.getZoom() * 1000) / 1000,
+      bearing: Math.round(map.getBearing() * 10) / 10,
+    };
     saveState();
   });
 
