@@ -4,7 +4,7 @@
 export const VECTOR_SOURCE = 'omt';
 
 // Язык подписей на карте. Если перевода нет — берётся местное название.
-const LABEL_LANG = 'ru';
+const LABEL_LANG = 'uk';
 
 export const COLORS = {
   land: '#272727',
