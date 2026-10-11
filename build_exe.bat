@@ -17,9 +17,14 @@ if not exist "zoomwar.py" (
 )
 
 echo [1/3] Proverjaju Python...
-python --version >> "%LOG%" 2>&1
+REM Zapuskaem realnyj kod, a ne "--version": zaglushka iz Microsoft Store
+REM pechataet slovo "Python" bez nomera versii i vyhodit s oshibkoj.
+python -c "import sys; print('PYOK', sys.version.split()[0])" > "%TEMP%\zw_py.txt" 2>>"%LOG%"
 if errorlevel 1 goto nopython
-for /f "delims=" %%v in ('python --version 2^>^&1') do echo       OK: %%v
+find "PYOK" "%TEMP%\zw_py.txt" >nul 2>&1
+if errorlevel 1 goto fakepython
+for /f "tokens=2" %%v in ('type "%TEMP%\zw_py.txt"') do echo       OK: Python %%v
+type "%TEMP%\zw_py.txt" >> "%LOG%"
 
 echo [2/3] Stavlju zavisimosti, eto dolgo - zhdi...
 python -m pip install --upgrade pip >> "%LOG%" 2>&1
@@ -55,6 +60,22 @@ echo   Settings -^> Remote control -^> Allow remote control
 echo.
 pause
 exit /b 0
+
+:fakepython
+echo.
+echo [OSHIBKA] Vmesto Python otvechaet zaglushka Microsoft Store.
+echo Nastojashhij Python napisal by nomer versii, a eta - net.
+echo.
+echo Chto delat:
+echo   1. Parametry - Prilozhenija - Dopolnitelnye parametry prilozhenija
+echo      - Psevdonimy vypolnenija prilozhenija
+echo   2. Vykljuchi polzunki u python.exe i python3.exe
+echo   3. Postav nastojashhij Python s https://www.python.org/downloads/
+echo      s galkoj "Add python.exe to PATH"
+echo   4. Perezagruzi kompjuter i zapusti etot .bat snova
+echo.
+echo Proverit chem prikidyvaetsja: v cmd nabrat   where python
+goto fail
 
 :nopython
 echo.
