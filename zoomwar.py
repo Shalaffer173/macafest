@@ -36,7 +36,8 @@ pyautogui.FAILSAFE = True
 SELENIUM_AVAILABLE = False
 try:
     from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.options import Options as ChromeOptions
+    from selenium.webdriver.edge.options import Options as EdgeOptions
     from selenium.webdriver.common.by import By
     from selenium.webdriver.common.action_chains import ActionChains
     from selenium.webdriver.common.keys import Keys
@@ -58,6 +59,18 @@ SOUNDPAD_EXE_CANDIDATES = (
     r"C:\Program Files\Soundpad\Soundpad.exe",
     r"C:\Program Files (x86)\Soundpad\Soundpad.exe",
 )
+
+CHROME_EXE_CANDIDATES = (
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+)
+
+
+def default_browser():
+    """Edge ships with Windows, so only prefer Chrome when it is installed."""
+    if any(os.path.isfile(p) for p in CHROME_EXE_CANDIDATES):
+        return "chrome"
+    return "edge"
 
 # ==================== THEME ====================
 BG = "#09090b"
@@ -380,6 +393,8 @@ class ZoomWar:
         self.driver = None
         self.spad_list = []
         self.embedder = WindowEmbedder()
+        # One variable shared by every tab's selector, so they stay in sync.
+        self.browser = tk.StringVar(value=default_browser())
 
         header = tk.Frame(root, bg=BG)
         header.pack(pady=(12, 8))
@@ -407,8 +422,8 @@ class ZoomWar:
         info = tile(root, "Инструкция", pad=9)
         info.pack(fill=tk.X, padx=10, pady=10)
         tk.Label(info.body, bg=TILE, fg=MUTED, font=(FONT, 8), justify=tk.LEFT, text=(
-            "Рука: фокус на Zoom, жми START. Ник/Чат/Очистка: запусти Chrome с флагом\n"
-            "chrome.exe --remote-debugging-port=9222, зайди на app.zoom.us\n"
+            "Рука: фокус на Zoom, жми START. Ник/Чат/Очистка: закрой браузер и\n"
+            "запусти его флагом --remote-debugging-port=9222, зайди на app.zoom.us\n"
             "Soundpad: жми 'Втащить Soundpad внутрь' + включи в нём Remote control"
         )).pack(anchor=tk.W)
 
@@ -418,6 +433,13 @@ class ZoomWar:
         tab = tk.Frame(notebook, bg=BG, padx=10, pady=10)
         notebook.add(tab, text=text)
         return tab
+
+    def _browser_row(self, parent):
+        frame = row(parent, pady=(0, 7))
+        lbl(frame, "Браузер", color=MUTED).pack(side=tk.LEFT)
+        radio(frame, "Chrome", self.browser, "chrome").pack(side=tk.LEFT, padx=(8, 0))
+        radio(frame, "Edge", self.browser, "edge").pack(side=tk.LEFT, padx=(4, 0))
+        return frame
 
     def _enable_strip(self, tab, variable):
         strip = tile(tab, pad=7)
@@ -504,8 +526,9 @@ class ZoomWar:
 
         conn = tile(tab, "Подключение")
         conn.pack(fill=tk.X, pady=(0, 8))
+        self._browser_row(conn.body)
         conn_row = row(conn.body)
-        lbl(conn_row, "Chrome Port", color=MUTED).pack(side=tk.LEFT)
+        lbl(conn_row, "Порт отладки", color=MUTED).pack(side=tk.LEFT)
         self.name_port = ent(conn_row, width=6, mono=True)
         self.name_port.pack(side=tk.LEFT, padx=6)
         self.name_port.insert(0, "9222")
@@ -578,7 +601,8 @@ class ZoomWar:
                     pass
                 time.sleep(cooldown)
         except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror("Ошибка", f"Chrome порт {port}:\n{e}"))
+            self.root.after(0, lambda: messagebox.showerror("Ошибка",
+                f"{self.browser.get().capitalize()}, порт {port}:\n{e}"))
             self.root.after(0, lambda: self.name_start_btn.config(state=tk.NORMAL))
             self.root.after(0, lambda: self.name_status.set("ОШИБКА"))
             self.root.after(0, lambda: self.name_status_label.config(fg=DANGER))
@@ -607,8 +631,9 @@ class ZoomWar:
 
         conn = tile(tab, "Подключение")
         conn.pack(fill=tk.X, pady=(0, 8))
+        self._browser_row(conn.body)
         conn_row = row(conn.body)
-        lbl(conn_row, "Chrome Port", color=MUTED).pack(side=tk.LEFT)
+        lbl(conn_row, "Порт отладки", color=MUTED).pack(side=tk.LEFT)
         self.chat_port = ent(conn_row, width=6, mono=True)
         self.chat_port.pack(side=tk.LEFT, padx=6)
         self.chat_port.insert(0, "9222")
@@ -658,7 +683,8 @@ class ZoomWar:
                     pass
                 time.sleep(cooldown)
         except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror("Ошибка", f"Chrome порт {port}:\n{e}"))
+            self.root.after(0, lambda: messagebox.showerror("Ошибка",
+                f"{self.browser.get().capitalize()}, порт {port}:\n{e}"))
             self.root.after(0, lambda: self.chat_start_btn.config(state=tk.NORMAL))
             self.root.after(0, lambda: self.chat_status.set("ОШИБКА"))
             self.root.after(0, lambda: self.chat_status_label.config(fg=DANGER))
@@ -737,8 +763,9 @@ class ZoomWar:
 
         conn = tile(tab, "Подключение")
         conn.pack(fill=tk.X, pady=(0, 8))
+        self._browser_row(conn.body)
         conn_row = row(conn.body)
-        lbl(conn_row, "Chrome Port", color=MUTED).pack(side=tk.LEFT)
+        lbl(conn_row, "Порт отладки", color=MUTED).pack(side=tk.LEFT)
         self.clean_port = ent(conn_row, width=6, mono=True)
         self.clean_port.pack(side=tk.LEFT, padx=6)
         self.clean_port.insert(0, "9222")
@@ -856,7 +883,8 @@ class ZoomWar:
 
                 time.sleep(cooldown)
         except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror("Ошибка", f"Chrome порт {port}:\n{e}"))
+            self.root.after(0, lambda: messagebox.showerror("Ошибка",
+                f"{self.browser.get().capitalize()}, порт {port}:\n{e}"))
             self.root.after(0, lambda: self.clean_start_btn.config(state=tk.NORMAL))
             self.root.after(0, lambda: self.clean_status.set("ОШИБКА"))
             self.root.after(0, lambda: self.clean_status_label.config(fg=DANGER))
@@ -1096,9 +1124,14 @@ class ZoomWar:
                 return
             except Exception:
                 self.driver = None
-        options = Options()
+        if self.browser.get() == "edge":
+            options = EdgeOptions()
+            launcher = webdriver.Edge
+        else:
+            options = ChromeOptions()
+            launcher = webdriver.Chrome
         options.add_experimental_option("debuggerAddress", f"127.0.0.1:{port}")
-        self.driver = webdriver.Chrome(options=options)
+        self.driver = launcher(options=options)
 
     def _scrape_participants(self):
         d = self.driver
