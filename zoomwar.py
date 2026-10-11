@@ -247,6 +247,10 @@ class SoundpadRemote:
         return sounds
 
     @classmethod
+    def is_playing(cls):
+        return "PLAYING" in cls.send("GetPlayStatus()").strip().upper()
+
+    @classmethod
     def play(cls, index):
         cls.send(f"DoPlaySound({index})")
 
@@ -912,13 +916,8 @@ class ZoomWar:
         self.spad_combo = ttk.Combobox(auto.body, state="readonly", font=(FONT, 8))
         self.spad_combo.pack(fill=tk.X, pady=5)
 
-        opts_f = row(auto.body)
-        self.spad_interrupt = tk.BooleanVar(value=True)
-        check(opts_f, "Обрывать предыдущий", self.spad_interrupt).pack(side=tk.LEFT)
-        lbl(opts_f, "Кулдаун (сек)", color=MUTED).pack(side=tk.LEFT, padx=(14, 0))
-        self.spad_cd_entry = ent(opts_f, width=6)
-        self.spad_cd_entry.pack(side=tk.LEFT, padx=6)
-        self.spad_cd_entry.insert(0, "5.0")
+        lbl(auto.body, "Треки идут подряд: следующий стартует, как только допел прошлый.",
+            size=8, color=MUTED).pack(anchor=tk.W)
 
         control = tile(tab, "Управление")
         control.pack(fill=tk.X)
@@ -1012,13 +1011,6 @@ class ZoomWar:
             self.root.after(0, lambda err=e: self.spad_log_var.set(f"Ошибка списка: {err}"))
 
     def spad_start(self):
-        try:
-            cd = float(self.spad_cd_entry.get())
-            if cd < 0.5:
-                cd = 0.5
-        except ValueError:
-            cd = 5.0
-
         fixed_index = None
         if self.spad_mode.get() == "fixed":
             if not self.spad_list:
@@ -1033,9 +1025,24 @@ class ZoomWar:
         self.spad_start_btn.config(state=tk.DISABLED)
         self.spad_status.set("ПРОВЕРЯЮ SOUNDPAD...")
         self.spad_status_label.config(fg=WARN)
-        threading.Thread(target=self._spad_loop, args=(fixed_index, cd), daemon=True).start()
+        threading.Thread(target=self._spad_loop, args=(fixed_index,), daemon=True).start()
 
-    def _spad_loop(self, fixed_index, cooldown):
+    def _spad_wait_until_done(self):
+        """Hold until Soundpad reports it stopped playing.
+
+        The leading pause both lets playback actually start and caps how
+        fast the loop can re-fire if Soundpad never reports its status.
+        """
+        time.sleep(0.4)
+        while self.spad_running:
+            try:
+                if not SoundpadRemote.is_playing():
+                    return
+            except Exception:
+                return
+            time.sleep(0.3)
+
+    def _spad_loop(self, fixed_index):
         if not SoundpadRemote.is_alive():
             self.root.after(0, lambda: messagebox.showerror(
                 "Soundpad недоступен",
@@ -1053,8 +1060,6 @@ class ZoomWar:
 
         while self.spad_running:
             try:
-                if self.spad_interrupt.get():
-                    SoundpadRemote.stop()
                 if fixed_index is not None:
                     SoundpadRemote.play(fixed_index)
                     label = f"трек {fixed_index}"
@@ -1068,7 +1073,9 @@ class ZoomWar:
                 self.root.after(0, lambda t=label: self.spad_log_var.set(f"Играет: {t}"))
             except Exception as e:
                 self.root.after(0, lambda err=e: self.spad_log_var.set(f"Ошибка: {err}"))
-            time.sleep(cooldown)
+                time.sleep(1)
+                continue
+            self._spad_wait_until_done()
 
     def spad_stop(self):
         self.spad_running = False
