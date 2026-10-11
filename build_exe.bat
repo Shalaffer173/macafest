@@ -38,7 +38,13 @@ echo       OK
 echo [3/3] Sobiraju EXE, minuty 2-3 - ne zakryvaj okno...
 REM "python -m PyInstaller", a ne prosto "pyinstaller":
 REM posle svezhej ustanovki pyinstaller.exe chasto eshhjo net v PATH.
-python -m PyInstaller --onefile --windowed --name "ZoomWar" zoomwar.py >> "%LOG%" 2>&1
+REM "--collect-all selenium": selenium gruzit svoi moduli dinamicheski,
+REM analizator PyInstaller ih ne vidit i exe padaet s oshibkoj
+REM "No module named 'selenium.webdriver.chrome.webdriver'".
+python -m PyInstaller --onefile --windowed --name "ZoomWar" ^
+    --collect-all selenium ^
+    --collect-all webdriver_manager ^
+    zoomwar.py >> "%LOG%" 2>&1
 if errorlevel 1 (
     echo [OSHIBKA] Sborka upala. Otkroj build-log.txt
     goto fail
