@@ -41,6 +41,7 @@ async function runSync(tgId, { notify }) {
       return result;
     } catch (e) {
       if (e.code === 'session_expired') {
+        console.error(`[sync] ${tgId}: сессия дневника потеряна, нужен повторный вход`);
         db.prepare('UPDATE users SET session = NULL, sync_error = ? WHERE tg_id = ?').run(e.message, tgId);
         if (notify && bot) await bot.send(tgId, '🔑 Сесія «Єдиної Школи» закінчилась. Відкрий список і увійди ще раз.', true);
       } else {
@@ -88,14 +89,16 @@ function state(tgId) {
   return { loggedIn: true, student: u.student_name, school: u.school_name, lastSync: u.last_sync, error: u.sync_error, syncing: running.has(tgId), tasks };
 }
 
-function loginAllowed(tgId) {
-  const hourAgo = Date.now() - 3600_000;
-  db.prepare('DELETE FROM login_attempts WHERE at < ?').run(hourAgo);
-  const n = db.prepare('SELECT COUNT(*) AS n FROM login_attempts WHERE tg_id = ?').get(tgId).n;
-  if (n >= 5) return false;
-  db.prepare('INSERT INTO login_attempts (tg_id, at) VALUES (?, ?)').run(tgId, Date.now());
-  return true;
+// Защита от подбора пароля: не больше 5 неверных паролей в час. Считаются только отказы
+// самого дневника; сбои сети и удачные входы в счёт не идут.
+const HOUR = 3600_000;
+function loginBlocked(tgId) {
+  db.prepare('DELETE FROM login_attempts WHERE at < ?').run(Date.now() - HOUR);
+  return db.prepare('SELECT COUNT(*) AS n FROM login_attempts WHERE tg_id = ?').get(tgId).n >= 5;
 }
+const noteBadPassword = (tgId) => db.prepare('INSERT INTO login_attempts (tg_id, at) VALUES (?, ?)').run(tgId, Date.now());
+const clearAttempts = (tgId) => db.prepare('DELETE FROM login_attempts WHERE tg_id = ?').run(tgId);
+db.exec('DELETE FROM login_attempts'); // счётчик прежней версии считал и сбои сети
 
 async function handleApi(req, res, path) {
   const user = authUser(req);
@@ -109,18 +112,21 @@ async function handleApi(req, res, path) {
     if (typeof username !== 'string' || typeof password !== 'string' || !username.trim() || !password) {
       return send(res, 400, { error: 'Введи логін і пароль' });
     }
-    if (!loginAllowed(tgId)) return send(res, 429, { error: 'Забагато спроб. Спробуй за годину' });
+    if (loginBlocked(tgId)) return send(res, 429, { error: 'Забагато невірних паролів. Спробуй за годину' });
     let session;
     try {
       session = await provider.login(username.trim(), password); // пароль дальше этой строки не уходит
     } catch (e) {
       console.error(`[login] ${tgId}: ${e.code ?? 'error'} ${e.message}`);
+      if (e.code === 'bad_credentials') noteBadPassword(tgId);
       return send(res, e.code === 'bad_credentials' || e.code === 'not_student' ? 403 : 502, { error: e.message });
     }
     db.prepare(`INSERT INTO users (tg_id, student_name, school_name, created_at) VALUES (?, ?, ?, ?)
       ON CONFLICT(tg_id) DO UPDATE SET student_name = excluded.student_name, school_name = excluded.school_name, sync_error = NULL`)
       .run(tgId, session.studentName ?? null, session.schoolName ?? null, new Date().toISOString());
     saveSession(tgId, session);
+    clearAttempts(tgId);
+    console.log(`[login] ${tgId}: вход выполнен`);
     startSync(tgId);
     return send(res, 200, state(tgId));
   }
@@ -140,6 +146,7 @@ async function handleApi(req, res, path) {
 
   if (req.method === 'POST' && path === '/api/logout') {
     deleteUser(tgId);
+    console.log(`[logout] ${tgId}: пользователь стёр свои данные`);
     return send(res, 200, { loggedIn: false });
   }
   return send(res, 404, { error: 'Not found' });
