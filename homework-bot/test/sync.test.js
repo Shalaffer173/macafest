@@ -4,7 +4,7 @@ import { createHmac } from 'node:crypto';
 import { diffTasks, syncUser, describeDiff } from '../src/sync.js';
 import { openDb } from '../src/db.js';
 import { encrypt, decrypt, verifyInitData } from '../src/crypto.js';
-import { appointmentsToTasks, findLoginActionId, absorbCookies } from '../src/eschool.js';
+import { appointmentsToTasks, mergeDuplicates, findLoginActionId, absorbCookies } from '../src/eschool.js';
 
 const win = { from: '2026-10-01', to: '2026-11-30' };
 const task = (id, o = {}) => ({ id, subject: 'Алгебра', text: '№ 1', topic: null, due: '2026-11-12', assigned: '2026-11-10', files: 0, ...o });
@@ -104,4 +104,22 @@ test('поиск id действия входа и разбор cookie', () => {
   const jar2 = {};
   absorbCookies(jar2, { headers: { getSetCookie: () => ['application_token=tok; Domain=.eschool-ua.com', 'application_token=; Max-Age=0; Path=/'] } });
   assert.deepEqual(jar2, { application_token: 'tok' });
+});
+
+test('одинаковые задания на разные темы одного урока склеиваются', () => {
+  const t = (id, o = {}) => ({ id, subject: 'Англ', text: 'Get 200: p. 6', topic: null, due: '2026-11-10', assigned: null, files: 0, ...o });
+  const out = mergeDuplicates([t('9', { topic: 'B', files: 2 }), t('5', { topic: 'A', text: 'Get  200: P. 6' }), t('7', { due: '2026-11-11' })]);
+  assert.deepEqual(out.map((x) => x.id), ['5', '7']);
+  assert.equal(out[0].topic, 'A; B');
+  assert.equal(out[0].files, 2);
+});
+
+test('первая синхронизация: прошедшие задания сразу отмечены сделанными', async () => {
+  const db = openDb(':memory:');
+  db.prepare("INSERT INTO users (tg_id, created_at) VALUES (1, 'x')").run();
+  const mk = (id, due) => ({ id, subject: 'A', text: id, topic: null, due, assigned: null, files: 0 });
+  const provider = { fetchTasks: async () => [mk('old', '2020-01-01'), mk('new', '2999-01-01')] };
+  await syncUser(db, provider, 1, {}, { daysBack: 1, daysForward: 1 });
+  const done = Object.fromEntries(db.prepare('SELECT task_id, done FROM tasks').all().map((r) => [r.task_id, r.done]));
+  assert.deepEqual(done, { old: 1, new: 0 });
 });

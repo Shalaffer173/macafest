@@ -13,6 +13,7 @@ export async function login() {
 
 export async function fetchTasks() {
   tick += 1;
+  await new Promise((r) => setTimeout(r, 1500)); // как настоящий дневник: не мгновенно
   const tasks = [
     { id: '101', subject: 'Алгебра', text: '§12, № 245, 247, 251', topic: 'Квадратні рівняння', due: iso(1), assigned: iso(-1), files: 0 },
     { id: '102', subject: 'Українська мова', text: 'Вправа 134 (письмово), вивчити правило на с. 87', topic: null, due: iso(1), assigned: iso(-2), files: 0 },

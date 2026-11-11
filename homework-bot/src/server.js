@@ -52,6 +52,12 @@ async function runSync(tgId, { notify }) {
   }
 }
 
+// Синхронизация идёт в фоне: она занимает до полуминуты, а запрос приложения
+// должен ответить сразу. Приложение само опрашивает /api/state, пока syncing = true.
+function startSync(tgId) {
+  runSync(tgId, { notify: false }).catch((e) => console.error(`[sync] ${tgId}: ${e.message}`));
+}
+
 // ---------- HTTP ----------
 function send(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -78,7 +84,7 @@ function state(tgId) {
   const tasks = db.prepare(`SELECT task_id AS id, subject, text, topic, due, assigned, files, done, backdated, changed, removed
     FROM tasks WHERE tg_id = ? ORDER BY due, subject`).all(tgId)
     .map((t) => ({ ...t, done: !!t.done, backdated: !!t.backdated, changed: !!t.changed, removed: !!t.removed }));
-  return { loggedIn: true, student: u.student_name, school: u.school_name, lastSync: u.last_sync, error: u.sync_error, tasks };
+  return { loggedIn: true, student: u.student_name, school: u.school_name, lastSync: u.last_sync, error: u.sync_error, syncing: running.has(tgId), tasks };
 }
 
 function loginAllowed(tgId) {
@@ -114,12 +120,12 @@ async function handleApi(req, res, path) {
       ON CONFLICT(tg_id) DO UPDATE SET student_name = excluded.student_name, school_name = excluded.school_name, sync_error = NULL`)
       .run(tgId, session.studentName ?? null, session.schoolName ?? null, new Date().toISOString());
     saveSession(tgId, session);
-    await runSync(tgId, { notify: false }).catch((e) => console.error(`[sync] ${tgId}: ${e.message}`));
+    startSync(tgId);
     return send(res, 200, state(tgId));
   }
 
   if (req.method === 'POST' && path === '/api/sync') {
-    await runSync(tgId, { notify: false }).catch(() => {});
+    startSync(tgId);
     return send(res, 200, state(tgId));
   }
 

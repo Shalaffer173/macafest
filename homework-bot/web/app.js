@@ -54,6 +54,7 @@ function renderLogin(error) {
     try {
       data = await api('/api/login', { username: user.value, password: pass.value });
       render();
+      watchSync();
     } catch (ex) {
       err.textContent = ex.message;
       btn.disabled = false;
@@ -97,7 +98,10 @@ function taskNode(t, today) {
 function render() {
   if (!data?.loggedIn) return renderLogin(data?.error);
   const today = todayIso();
-  const live = data.tasks.filter((t) => !t.removed);
+  // Прогресс считаем по текущей неделе и дальше, плюс всё несделанное из прошлого.
+  const d0 = new Date(today);
+  const monday = new Date(d0.getTime() - ((d0.getUTCDay() + 6) % 7) * 86400000).toISOString().slice(0, 10);
+  const live = data.tasks.filter((t) => !t.removed && (t.due >= monday || !t.done));
   const doneCount = live.filter((t) => t.done).length;
   const pct = live.length ? Math.round((doneCount / live.length) * 100) : 0;
 
@@ -111,7 +115,7 @@ function render() {
   const keys = [...groups.keys()].sort((a, b) => (a === 'overdue' ? -1 : b === 'overdue' ? 1 : a < b ? -1 : 1));
   if (filter !== 'todo') keys.reverse();
 
-  const refresh = el('button', { className: `icon-btn${busy ? ' spin' : ''}`, textContent: '↻', title: 'Оновити' });
+  const refresh = el('button', { className: `icon-btn${busy || data.syncing ? ' spin' : ''}`, textContent: '↻', title: 'Оновити' });
   refresh.setAttribute('aria-label', 'Оновити');
   refresh.addEventListener('click', sync);
 
@@ -135,6 +139,7 @@ function render() {
         el('h1', { textContent: 'Домашка' }),
         el('div', { className: 'who', textContent: [data.student, data.school].filter(Boolean).join(' · ') })),
       refresh),
+    data.syncing && !data.tasks.length && el('p', { className: 'muted', textContent: 'Завантажую завдання зі щоденника…' }),
     data.error && el('p', { className: 'error', textContent: `Не вдалося оновити: ${data.error}` }),
     el('div', { className: 'progress' },
       el('div', { className: 'row' },
@@ -153,17 +158,32 @@ function render() {
 }
 
 async function sync() {
-  if (busy) return;
+  if (busy || data.syncing) return;
   busy = true;
   render();
   try { data = await api('/api/sync', {}); } catch (e) { data.error = e.message; }
   busy = false;
   render();
+  watchSync();
+}
+
+// Пока сервер синхронизируется в фоне, раз в 2 секунды спрашиваем, не закончил ли.
+let watching = false;
+async function watchSync() {
+  if (watching) return;
+  watching = true;
+  for (let i = 0; i < 60 && data?.syncing; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    try { data = await api('/api/state'); } catch { break; }
+    render();
+  }
+  watching = false;
 }
 
 try {
   data = await api('/api/state');
   render();
+  watchSync();
 } catch (e) {
   app.replaceChildren(el('p', { className: 'empty', textContent: e.message }));
 }

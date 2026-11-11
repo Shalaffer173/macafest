@@ -173,7 +173,25 @@ export function appointmentsToTasks(appointments) {
       });
     }
   }
-  return [...tasks.values()].filter((t) => t.due);
+  return mergeDuplicates([...tasks.values()].filter((t) => t.due));
+}
+
+/**
+ * Если на уроке несколько тем, дневник хранит одно и то же задание отдельной записью
+ * на каждую тему. Склеиваем записи с одинаковыми предметом, датой и текстом в одну;
+ * её id — наименьший из исходных, чтобы он не менялся от синхронизации к синхронизации.
+ */
+export function mergeDuplicates(tasks) {
+  const norm = (s) => s.replace(/\s+/g, ' ').toLowerCase();
+  const byKey = new Map();
+  for (const t of [...tasks].sort((a, b) => Number(a.id) - Number(b.id))) {
+    const key = `${t.subject}|${t.due}|${norm(t.text)}`;
+    const first = byKey.get(key);
+    if (!first) { byKey.set(key, { ...t }); continue; }
+    first.files = Math.max(first.files, t.files);
+    if (t.topic && !(first.topic ?? '').includes(t.topic)) first.topic = first.topic ? `${first.topic}; ${t.topic}` : t.topic;
+  }
+  return [...byKey.values()];
 }
 
 function addDays(iso, n) {
@@ -191,7 +209,7 @@ export async function fetchTasks(session, from, to) {
       start, end, embed: EMBED, fileRole: 'schoolboy',
     });
     all.push(...(data.Items ?? []));
-    await new Promise((r) => setTimeout(r, 400)); // не частим
+    await new Promise((r) => setTimeout(r, 200)); // не частим
   }
   return appointmentsToTasks(all);
 }
