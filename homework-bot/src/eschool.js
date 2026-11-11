@@ -76,10 +76,12 @@ export async function login(username, password, log = () => {}) {
   log(`форма входа найдена, id действия ${actionId.slice(0, 8)}…`);
 
   const form = new FormData();
-  form.set('0', '[null,"$K1"]'); // аргументы серверного действия: (prevState, formData)
+  // Аргументы серверного действия: (prevState, formData). Порядок важен: сначала поля
+  // формы, в конце ссылка на них — так отправляет сам сайт, иначе сервер видит пустую форму.
   form.set('1_username', username);
   form.set('1_password', password);
   form.set('1_from', '');
+  form.set('0', '[{"ok":true},"$K1"]');
   const res = await request(jar, `${PORTAL}/login`, {
     method: 'POST',
     headers: { 'Next-Action': actionId, Accept: 'text/x-component', Origin: PORTAL, Referer: `${PORTAL}/login` },
