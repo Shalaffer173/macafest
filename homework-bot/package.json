@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/server.js",
     "demo": "DEMO=1 node src/server.js",
+    "tunnel": "node src/dev-tunnel.js",
     "check": "node src/check.js",
     "test": "node --test"
   }
