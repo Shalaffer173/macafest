@@ -47,5 +47,11 @@ export function openDb(path) {
     // Прежняя версия ставила таким заданиям галочку сама (done_at = first_seen) — снимаем.
     db.exec('UPDATE tasks SET archived = 1, done = 0, done_at = NULL WHERE done = 1 AND done_at = first_seen');
   }
+  // v0.1.2: список за весь учебный год
+  const ucols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+  if (!ucols.includes('covered_from')) {
+    db.exec('ALTER TABLE users ADD COLUMN covered_from TEXT');   // с какой даты задания уже загружались
+    db.exec('ALTER TABLE users ADD COLUMN last_full_sync TEXT'); // когда последний раз перечитан весь год
+  }
   return db;
 }

@@ -35,12 +35,24 @@ function shift(iso, n) {
   return d.toISOString().slice(0, 10);
 }
 
+/** 1 сентября текущего учебного года. */
+export function schoolYearStart(todayIso) {
+  const y = Number(todayIso.slice(0, 4));
+  return `${todayIso.slice(5, 7) >= '08' ? y : y - 1}-09-01`;
+}
+
 /** Одна синхронизация пользователя. Возвращает { diff, first } для уведомлений. */
 export async function syncUser(db, provider, tgId, session, cfg) {
-  const user = db.prepare('SELECT last_sync FROM users WHERE tg_id = ?').get(tgId);
+  const user = db.prepare('SELECT last_sync, covered_from, last_full_sync FROM users WHERE tg_id = ?').get(tgId);
   const lastSyncDay = user?.last_sync ? user.last_sync.slice(0, 10) : null;
-  const from = shift(today(), -cfg.daysBack);
+  // Обычно перечитываем последние недели, а раз в сутки и при первом входе — весь учебный год.
+  const fullDue = !user?.last_full_sync || Date.now() - Date.parse(user.last_full_sync) > (cfg.fullSyncHours ?? 24) * 3600_000;
+  const recent = shift(today(), -cfg.daysBack);
+  const yearStart = schoolYearStart(today());
+  const from = fullDue && yearStart < recent ? yearStart : recent;
   const to = shift(today(), cfg.daysForward);
+  // Всё, что старше этой даты, бот раньше не загружал: такие задания не «новые», а архив.
+  const archiveBefore = user?.covered_from ?? today();
 
   const fetched = await provider.fetchTasks(session, from, to);
   const rows = db.prepare('SELECT * FROM tasks WHERE tg_id = ?').all(tgId);
@@ -59,15 +71,18 @@ export async function syncUser(db, provider, tgId, session, cfg) {
   db.exec('BEGIN');
   try {
     for (const t of diff.added) {
-      // При первом входе прошедшие задания уходят в архив: бот не знает, сделаны ли они,
-      // поэтому не показывает их ни как просроченные, ни как сделанные.
-      const past = lastSyncDay == null && t.due < today();
-      ins.run(tgId, t.id, t.subject, t.text, t.topic, t.due, t.assigned, t.files, t.backdated ? 1 : 0, now, past ? 1 : 0);
+      // Задания из периода, который бот раньше не видел (до первого входа или до расширения
+      // окна), уходят в архив: бот не знает, сделаны ли они, и не сообщает о них как о новых.
+      t.archived = t.due < archiveBefore && t.due < today();
+      if (t.archived) t.backdated = false;
+      ins.run(tgId, t.id, t.subject, t.text, t.topic, t.due, t.assigned, t.files, t.backdated ? 1 : 0, now, t.archived ? 1 : 0);
     }
     for (const t of diff.changed) upd.run(t.subject, t.text, t.topic, t.due, t.assigned, t.files, tgId, t.id);
     for (const t of diff.restored) setRemoved.run(0, tgId, t.id);
     for (const t of diff.removed) setRemoved.run(1, tgId, t.task_id);
-    db.prepare('UPDATE users SET last_sync = ?, sync_error = NULL WHERE tg_id = ?').run(now, tgId);
+    const covered = user?.covered_from && user.covered_from < from ? user.covered_from : from;
+    db.prepare('UPDATE users SET last_sync = ?, sync_error = NULL, covered_from = ?, last_full_sync = ? WHERE tg_id = ?')
+      .run(now, covered, from === yearStart || yearStart >= recent ? now : user?.last_full_sync ?? null, tgId);
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
@@ -84,6 +99,7 @@ export function describeDiff({ diff, first }) {
   if (first) return null; // при первом входе всё «новое», не шумим
   const lines = [];
   for (const t of diff.added) {
+    if (t.archived) continue;
     lines.push(t.backdated
       ? `⚠️ Додано заднім числом: ${t.subject} на ${fmt(t.due)}\n${cut(t.text)}`
       : `🆕 ${t.subject} на ${fmt(t.due)}\n${cut(t.text)}`);

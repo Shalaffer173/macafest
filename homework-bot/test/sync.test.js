@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { diffTasks, syncUser, describeDiff } from '../src/sync.js';
+import { diffTasks, syncUser, describeDiff, schoolYearStart } from '../src/sync.js';
 import { openDb } from '../src/db.js';
 import { encrypt, decrypt, verifyInitData } from '../src/crypto.js';
 import { appointmentsToTasks, mergeDuplicates, findLoginActionId, absorbCookies } from '../src/eschool.js';
@@ -124,7 +124,8 @@ test('первая синхронизация: прошедшие задания
   const rows = () => Object.fromEntries(db.prepare('SELECT task_id, done, archived FROM tasks').all().map((r) => [r.task_id, [r.done, r.archived]]));
   assert.deepEqual(rows(), { old: [0, 1], new: [0, 0] });
   // при следующих синхронизациях прошедшее задание в архив уже не попадает
-  list = [...list, mk('late', '2020-01-02')];
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  list = [...list, mk('late', yesterday)];
   await syncUser(db, provider, 1, {}, { daysBack: 1, daysForward: 1 });
   assert.deepEqual(rows().late, [0, 0]);
 });
@@ -146,4 +147,37 @@ test('обновление базы: галочки, поставленные с
   const db = openDb(path);
   const rows = Object.fromEntries(db.prepare('SELECT task_id, done, archived FROM tasks').all().map((r) => [r.task_id, [r.done, r.archived]]));
   assert.deepEqual(rows, { auto: [0, 1], mine: [1, 0], todo: [0, 0] });
+});
+
+test('начало учебного года', () => {
+  assert.equal(schoolYearStart('2026-11-11'), '2026-09-01');
+  assert.equal(schoolYearStart('2027-03-01'), '2026-09-01');
+  assert.equal(schoolYearStart('2026-09-01'), '2026-09-01');
+});
+
+test('расширение окна до 1 сентября: старые задания идут в архив без уведомлений', async () => {
+  const db = openDb(':memory:');
+  db.prepare("INSERT INTO users (tg_id, created_at) VALUES (1, 'x')").run();
+  const iso = (n) => { const d = new Date(); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const mk = (id, due) => ({ id, subject: 'A', text: id, topic: null, due, assigned: due, files: 0 });
+  const calls = [];
+  let list = [mk('recent', iso(-3)), mk('next', iso(2))];
+  const provider = { fetchTasks: async (_s, from, to) => { calls.push(from); return list; } };
+  const cfg = { daysBack: 10, daysForward: 14, fullSyncHours: 24 };
+
+  await syncUser(db, provider, 1, {}, cfg);
+  // имитируем базу старой версии: год ещё не перечитывался, охват — только 10 дней
+  db.prepare('UPDATE users SET last_full_sync = NULL, covered_from = ? WHERE tg_id = 1').run(iso(-10));
+  list = [...list, mk('september', iso(-40)), mk('fresh', iso(-1))];
+  const res = await syncUser(db, provider, 1, {}, cfg);
+
+  const rows = Object.fromEntries(db.prepare('SELECT task_id, archived, backdated FROM tasks').all().map((r) => [r.task_id, [r.archived, r.backdated]]));
+  assert.deepEqual(rows.september, [1, 0]);
+  assert.equal(rows.fresh[0], 0);
+  const text = describeDiff(res);
+  assert.match(text, /fresh/);
+  assert.doesNotMatch(text, /september/);
+  // сразу после полной синхронизации следующая снова короткая
+  await syncUser(db, provider, 1, {}, cfg);
+  assert.equal(calls.at(-1), iso(-10));
 });
