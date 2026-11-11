@@ -170,7 +170,9 @@ export function appointmentsToTasks(appointments) {
         due: day(h.TargetAppointmentDate) ?? day(a.Date),
         assigned: day(h.AppointmentDate),
         files: h.FilesCount ?? 0,
-        answered: h.HaveAnswer === true, // ученик сдал ответ через дневник
+        // Ученик сдал ответ: текстом (HaveAnswer) или файлами. FilesCount при fileRole=schoolboy
+        // считает файлы ученика, а не учителя — проверено на настоящем аккаунте.
+        answered: h.HaveAnswer === true || (h.FilesCount ?? 0) > 0,
       });
     }
   }

@@ -90,7 +90,11 @@ test('разбор ответа дневника в список заданий'
     { Id: 2, Subject: 'Фізика', Date: '2026-11-13', Embed: null },
     null,
   ]);
-  assert.deepEqual(tasks, [{ id: '7', subject: 'Алгебра', text: '№ 245', topic: 'Рівняння', due: '2026-11-12', assigned: '2026-11-10', files: 2, answered: false }]);
+  assert.deepEqual(tasks, [{ id: '7', subject: 'Алгебра', text: '№ 245', topic: 'Рівняння', due: '2026-11-12', assigned: '2026-11-10', files: 2, answered: true }]);
+  const one = (h) => appointmentsToTasks([{ Subject: 'A', Date: '2026-11-12', Embed: { TargetHomeworks: [{ Id: 1, Description: 'x', ...h }] } }])[0].answered;
+  assert.equal(one({}), false);
+  assert.equal(one({ HaveAnswer: true }), true);
+  assert.equal(one({ FilesCount: 1 }), true);
 });
 
 test('поиск id действия входа и разбор cookie', () => {

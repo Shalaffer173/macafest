@@ -17,11 +17,11 @@ export async function fetchTasks() {
   const tasks = [
     { id: '101', subject: 'Алгебра', text: '§12, № 245, 247, 251', topic: 'Квадратні рівняння', due: iso(1), assigned: iso(-1), files: 0 },
     { id: '102', subject: 'Українська мова', text: 'Вправа 134 (письмово), вивчити правило на с. 87', topic: null, due: iso(1), assigned: iso(-2), files: 0 },
-    { id: '103', subject: 'Історія України', text: 'Опрацювати §9, скласти хронологічну таблицю', topic: 'Козацька доба', due: iso(2), assigned: iso(-1), files: 1 },
+    { id: '103', subject: 'Історія України', text: 'Опрацювати §9, скласти хронологічну таблицю', topic: 'Козацька доба', due: iso(2), assigned: iso(-1), files: 0 },
     { id: '104', subject: 'Англійська мова', text: 'Workbook p. 34 ex. 2–4', topic: null, due: iso(3), assigned: iso(0), files: 0 },
     { id: '105', subject: 'Фізика', text: 'Задачі 8.3, 8.7; підготуватися до лабораторної', topic: 'Закони Ньютона', due: iso(-2), assigned: iso(-5), files: 0 },
     { id: '106', subject: 'Геометрія', text: '№ 318, 322', topic: null, due: iso(-4), assigned: iso(-6), files: 0, answered: true },
-    { id: '107', subject: 'Біологія', text: 'Конспект §14, намалювати будову клітини', topic: null, due: iso(5), assigned: iso(0), files: 2 },
+    { id: '107', subject: 'Біологія', text: 'Конспект §14, намалювати будову клітини', topic: null, due: iso(5), assigned: iso(0), files: 0 },
   ];
   // Со второй синхронизации «учитель» добавляет задание задним числом.
   if (tick > 1) {
