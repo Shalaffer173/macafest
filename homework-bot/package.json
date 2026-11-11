@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Telegram-бот с мини-приложением: список домашних заданий из «Єдиної Школи»",
-  "engines": { "node": ">=22.5" },
+  "engines": { "node": ">=22.9" },
   "scripts": {
-    "start": "node src/server.js",
+    "start": "node --env-file-if-exists=.env src/server.js",
     "demo": "DEMO=1 node src/server.js",
     "check": "node src/check.js",
     "test": "node --test"
