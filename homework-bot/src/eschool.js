@@ -28,6 +28,10 @@ export function absorbCookies(jar, res) {
 }
 const cookieHeader = (jar) => Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
 
+let trace = null;
+/** Включает пошаговый журнал запросов (для npm run check). Токены и пароль в него не попадают. */
+export function setTrace(fn) { trace = fn; }
+
 async function request(jar, url, opts = {}) {
   const res = await fetch(url, {
     redirect: 'manual',
@@ -36,6 +40,13 @@ async function request(jar, url, opts = {}) {
     headers: { 'User-Agent': UA, Accept: 'application/json', Cookie: cookieHeader(jar), ...opts.headers },
   });
   absorbCookies(jar, res);
+  if (trace) {
+    const names = (res.headers.getSetCookie?.() ?? []).map((c) => c.split('=')[0] + (/=;|max-age=(0|-\d+)/i.test(c) ? '(удалена)' : ''));
+    let line = `${opts.method ?? 'GET'} ${new URL(url).host}${new URL(url).pathname} -> ${res.status}`;
+    if (names.length) line += `, cookie: ${names.join(', ')}`;
+    if (res.status >= 400) line += `, ответ: ${(await res.clone().text()).slice(0, 200)}`;
+    trace(line);
+  }
   return res;
 }
 

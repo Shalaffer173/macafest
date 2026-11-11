@@ -1,7 +1,9 @@
 // Проверка связи с «Єдиною Школою» без Telegram и сервера: npm run check
 // Спрашивает логин и пароль, входит и печатает задания. Ничего не сохраняет.
 import { createInterface } from 'node:readline';
-import { login, fetchTasks } from './eschool.js';
+import { login, fetchTasks, setTrace } from './eschool.js';
+
+setTrace((m) => console.log(`   · ${m}`));
 
 function ask(question, hidden = false) {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
