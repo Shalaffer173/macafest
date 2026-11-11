@@ -61,8 +61,12 @@ export async function syncUser(db, provider, tgId, session, cfg) {
   const now = new Date().toISOString();
 
   const ins = db.prepare(`INSERT INTO tasks
-    (tg_id, task_id, subject, text, topic, due, assigned, files, backdated, first_seen, archived)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    (tg_id, task_id, subject, text, topic, due, assigned, files, backdated, first_seen, archived, answered, done, done_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  // Ответ сдан в дневнике -> задание сделано. Срабатывает один раз, в момент появления
+  // ответа, чтобы снятая вручную галочка не возвращалась при каждой синхронизации.
+  const setAnswered = db.prepare(`UPDATE tasks SET answered = 1, done = 1, done_at = ?, archived = 0
+    WHERE tg_id = ? AND task_id = ? AND answered = 0`);
   // Изменённое задание снова становится несделанным: учитель мог поменять условие.
   const upd = db.prepare(`UPDATE tasks SET subject = ?, text = ?, topic = ?, due = ?, assigned = ?, files = ?,
     changed = 1, removed = 0, archived = 0, done = 0, done_at = NULL WHERE tg_id = ? AND task_id = ?`);
@@ -73,13 +77,15 @@ export async function syncUser(db, provider, tgId, session, cfg) {
     for (const t of diff.added) {
       // Задания из периода, который бот раньше не видел (до первого входа или до расширения
       // окна), уходят в архив: бот не знает, сделаны ли они, и не сообщает о них как о новых.
-      t.archived = t.due < archiveBefore && t.due < today();
+      t.archived = !t.answered && t.due < archiveBefore && t.due < today();
       if (t.archived) t.backdated = false;
-      ins.run(tgId, t.id, t.subject, t.text, t.topic, t.due, t.assigned, t.files, t.backdated ? 1 : 0, now, t.archived ? 1 : 0);
+      ins.run(tgId, t.id, t.subject, t.text, t.topic, t.due, t.assigned, t.files, t.backdated ? 1 : 0, now, t.archived ? 1 : 0,
+        t.answered ? 1 : 0, t.answered ? 1 : 0, t.answered ? now : null);
     }
     for (const t of diff.changed) upd.run(t.subject, t.text, t.topic, t.due, t.assigned, t.files, tgId, t.id);
     for (const t of diff.restored) setRemoved.run(0, tgId, t.id);
     for (const t of diff.removed) setRemoved.run(1, tgId, t.task_id);
+    for (const t of fetched) if (t.answered && existing.has(t.id)) setAnswered.run(now, tgId, t.id);
     const covered = user?.covered_from && user.covered_from < from ? user.covered_from : from;
     db.prepare('UPDATE users SET last_sync = ?, sync_error = NULL, covered_from = ?, last_full_sync = ? WHERE tg_id = ?')
       .run(now, covered, from === yearStart || yearStart >= recent ? now : user?.last_full_sync ?? null, tgId);
@@ -88,7 +94,7 @@ export async function syncUser(db, provider, tgId, session, cfg) {
     db.exec('ROLLBACK');
     throw e;
   }
-  return { diff, first: lastSyncDay == null };
+  return { diff, first: lastSyncDay == null, from, to, fetched: fetched.length, answered: fetched.filter((t) => t.answered).length };
 }
 
 const fmt = (iso) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;

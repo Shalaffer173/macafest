@@ -35,6 +35,7 @@ async function runSync(tgId, { notify }) {
     try {
       const result = await syncUser(db, provider, tgId, session, config);
       saveSession(tgId, session); // токены могли обновиться
+      console.log(`[sync] ${tgId}: ${result.from}..${result.to}, заданий ${result.fetched}, с ответом ${result.answered}, новых ${result.diff.added.length}`);
       const text = notify && describeDiff(result);
       if (text && bot) await bot.send(tgId, text, true);
       return result;
@@ -81,9 +82,9 @@ function authUser(req) {
 function state(tgId) {
   const u = db.prepare('SELECT session, student_name, school_name, last_sync, sync_error FROM users WHERE tg_id = ?').get(tgId);
   if (!u?.session) return { loggedIn: false, error: u?.sync_error ?? null };
-  const tasks = db.prepare(`SELECT task_id AS id, subject, text, topic, due, assigned, files, done, backdated, changed, removed, archived
+  const tasks = db.prepare(`SELECT task_id AS id, subject, text, topic, due, assigned, files, done, backdated, changed, removed, archived, answered
     FROM tasks WHERE tg_id = ? ORDER BY due, subject`).all(tgId)
-    .map((t) => ({ ...t, done: !!t.done, backdated: !!t.backdated, changed: !!t.changed, removed: !!t.removed, archived: !!t.archived }));
+    .map((t) => ({ ...t, done: !!t.done, backdated: !!t.backdated, changed: !!t.changed, removed: !!t.removed, archived: !!t.archived, answered: !!t.answered }));
   return { loggedIn: true, student: u.student_name, school: u.school_name, lastSync: u.last_sync, error: u.sync_error, syncing: running.has(tgId), tasks };
 }
 

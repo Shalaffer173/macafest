@@ -78,6 +78,7 @@ function taskNode(t, today) {
       el('div', { className: 'meta' },
         t.removed && el('span', { className: 'tag danger', textContent: 'прибрано вчителем' }),
         t.archived && el('span', { className: 'tag', textContent: 'до підключення бота' }),
+        t.answered && el('span', { className: 'tag ok', textContent: 'відповідь здано' }),
         t.backdated && el('span', { className: 'tag warn', textContent: 'додано заднім числом' }),
         t.changed && el('span', { className: 'tag warn', textContent: 'змінено' }),
         !t.done && !t.removed && !t.archived && t.due < today && el('span', { className: 'tag danger', textContent: 'прострочено' }),
@@ -155,6 +156,8 @@ function render() {
           el('ul', {}, ...groups.get(k).map((t) => taskNode(t, today))),
         ])
       : [el('p', { className: 'empty', textContent: filter === 'todo' ? '🎉 Усе зроблено' : 'Тут поки порожньо' })]),
+    data.tasks.length > 0 && el('p', { className: 'muted center', textContent:
+      `Усього завдань: ${data.tasks.length}, найстаріше від ${data.tasks[0].due.slice(8, 10)}.${data.tasks[0].due.slice(5, 7)}. В архіві: ${data.tasks.filter((t) => t.archived).length}` }),
     data.lastSync && el('p', { className: 'muted center', textContent: `Оновлено ${new Date(data.lastSync).toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` }),
     logout].filter(Boolean));
 }

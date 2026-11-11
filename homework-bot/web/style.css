@@ -61,6 +61,7 @@ ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .tag { padding: 1px 7px; border-radius: 999px; border: 1px solid currentColor; }
 .tag.warn { color: var(--warn); }
 .tag.danger { color: var(--danger); }
+.tag.ok { color: var(--ok); }
 .empty { text-align: center; padding: 36px 12px; color: var(--muted); }
 
 form { display: grid; gap: 12px; margin-top: 20px; }

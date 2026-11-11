@@ -90,7 +90,7 @@ test('разбор ответа дневника в список заданий'
     { Id: 2, Subject: 'Фізика', Date: '2026-11-13', Embed: null },
     null,
   ]);
-  assert.deepEqual(tasks, [{ id: '7', subject: 'Алгебра', text: '№ 245', topic: 'Рівняння', due: '2026-11-12', assigned: '2026-11-10', files: 2 }]);
+  assert.deepEqual(tasks, [{ id: '7', subject: 'Алгебра', text: '№ 245', topic: 'Рівняння', due: '2026-11-12', assigned: '2026-11-10', files: 2, answered: false }]);
 });
 
 test('поиск id действия входа и разбор cookie', () => {
@@ -180,4 +180,26 @@ test('расширение окна до 1 сентября: старые зад
   // сразу после полной синхронизации следующая снова короткая
   await syncUser(db, provider, 1, {}, cfg);
   assert.equal(calls.at(-1), iso(-10));
+});
+
+test('сданный в дневнике ответ отмечает задание сделанным один раз', async () => {
+  const db = openDb(':memory:');
+  db.prepare("INSERT INTO users (tg_id, created_at) VALUES (1, 'x')").run();
+  const mk = (id, due, answered = false) => ({ id, subject: 'A', text: id, topic: null, due, assigned: null, files: 0, answered });
+  let list = [mk('oldAnswered', '2020-01-01', true), mk('old', '2020-01-02'), mk('later', '2999-01-01')];
+  const provider = { fetchTasks: async () => list };
+  const cfg = { daysBack: 1, daysForward: 1 };
+  const rows = () => Object.fromEntries(db.prepare('SELECT task_id, done, archived FROM tasks').all().map((r) => [r.task_id, [r.done, r.archived]]));
+
+  await syncUser(db, provider, 1, {}, cfg);
+  assert.deepEqual(rows(), { oldAnswered: [1, 0], old: [0, 1], later: [0, 0] });
+
+  list = [mk('oldAnswered', '2020-01-01', true), mk('old', '2020-01-02', true), mk('later', '2999-01-01', true)];
+  await syncUser(db, provider, 1, {}, cfg);
+  assert.deepEqual(rows(), { oldAnswered: [1, 0], old: [1, 0], later: [1, 0] });
+
+  // галочку сняли вручную — следующая синхронизация её не возвращает
+  db.prepare("UPDATE tasks SET done = 0 WHERE task_id = 'later'").run();
+  await syncUser(db, provider, 1, {}, cfg);
+  assert.deepEqual(rows().later, [0, 0]);
 });

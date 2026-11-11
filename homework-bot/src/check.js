@@ -28,9 +28,9 @@ try {
 
   console.log('2. Загрузка заданий за 2 недели назад и 2 вперёд…');
   const tasks = await fetchTasks(session, shift(-14), shift(14));
-  console.log(`   OK: заданий найдено ${tasks.length}`);
+  console.log(`   OK: заданий найдено ${tasks.length}, из них с ответом ученика ${tasks.filter((t) => t.answered).length}, с файлами ${tasks.filter((t) => t.files > 0).length}`);
   for (const t of tasks.sort((a, b) => (a.due < b.due ? -1 : 1))) {
-    console.log(`   ${t.due}  ${t.subject}: ${t.text.replace(/\s+/g, ' ').slice(0, 80)}`);
+    console.log(`   ${t.due} ${t.answered ? '✓' : ' '} ${t.subject}: ${t.text.replace(/\s+/g, ' ').slice(0, 80)}`);
   }
   console.log('\nВсё работает.');
 } catch (e) {

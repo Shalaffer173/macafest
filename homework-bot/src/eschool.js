@@ -170,6 +170,7 @@ export function appointmentsToTasks(appointments) {
         due: day(h.TargetAppointmentDate) ?? day(a.Date),
         assigned: day(h.AppointmentDate),
         files: h.FilesCount ?? 0,
+        answered: h.HaveAnswer === true, // ученик сдал ответ через дневник
       });
     }
   }
@@ -189,6 +190,7 @@ export function mergeDuplicates(tasks) {
     const first = byKey.get(key);
     if (!first) { byKey.set(key, { ...t }); continue; }
     first.files = Math.max(first.files, t.files);
+    first.answered = first.answered || t.answered;
     if (t.topic && !(first.topic ?? '').includes(t.topic)) first.topic = first.topic ? `${first.topic}; ${t.topic}` : t.topic;
   }
   return [...byKey.values()];

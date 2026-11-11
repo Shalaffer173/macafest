@@ -53,5 +53,9 @@ export function openDb(path) {
     db.exec('ALTER TABLE users ADD COLUMN covered_from TEXT');   // с какой даты задания уже загружались
     db.exec('ALTER TABLE users ADD COLUMN last_full_sync TEXT'); // когда последний раз перечитан весь год
   }
+  // v0.1.3: задания, по которым ученик сдал ответ в дневнике, отмечаются сделанными
+  if (!db.prepare('PRAGMA table_info(tasks)').all().some((c) => c.name === 'answered')) {
+    db.exec('ALTER TABLE tasks ADD COLUMN answered INTEGER NOT NULL DEFAULT 0');
+  }
   return db;
 }
