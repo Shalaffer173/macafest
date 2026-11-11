@@ -81,9 +81,9 @@ function authUser(req) {
 function state(tgId) {
   const u = db.prepare('SELECT session, student_name, school_name, last_sync, sync_error FROM users WHERE tg_id = ?').get(tgId);
   if (!u?.session) return { loggedIn: false, error: u?.sync_error ?? null };
-  const tasks = db.prepare(`SELECT task_id AS id, subject, text, topic, due, assigned, files, done, backdated, changed, removed
+  const tasks = db.prepare(`SELECT task_id AS id, subject, text, topic, due, assigned, files, done, backdated, changed, removed, archived
     FROM tasks WHERE tg_id = ? ORDER BY due, subject`).all(tgId)
-    .map((t) => ({ ...t, done: !!t.done, backdated: !!t.backdated, changed: !!t.changed, removed: !!t.removed }));
+    .map((t) => ({ ...t, done: !!t.done, backdated: !!t.backdated, changed: !!t.changed, removed: !!t.removed, archived: !!t.archived }));
   return { loggedIn: true, student: u.student_name, school: u.school_name, lastSync: u.last_sync, error: u.sync_error, syncing: running.has(tgId), tasks };
 }
 
@@ -132,7 +132,7 @@ async function handleApi(req, res, path) {
   const m = /^\/api\/tasks\/([^/]+)\/done$/.exec(path);
   if (req.method === 'POST' && m) {
     const { done } = await readJson(req);
-    const r = db.prepare('UPDATE tasks SET done = ?, done_at = ?, changed = 0 WHERE tg_id = ? AND task_id = ?')
+    const r = db.prepare('UPDATE tasks SET done = ?, done_at = ?, changed = 0, archived = 0 WHERE tg_id = ? AND task_id = ?')
       .run(done ? 1 : 0, done ? new Date().toISOString() : null, tgId, decodeURIComponent(m[1]));
     return r.changes ? send(res, 200, { ok: true }) : send(res, 404, { error: 'Завдання не знайдено' });
   }

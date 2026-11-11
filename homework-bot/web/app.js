@@ -70,22 +70,24 @@ function renderLogin(error) {
 function taskNode(t, today) {
   const box = el('input', { type: 'checkbox', checked: t.done, disabled: t.removed });
   box.setAttribute('aria-label', `Зроблено: ${t.subject}`);
-  const li = el('li', { className: `task${t.done ? ' done' : ''}${t.removed ? ' removed' : ''}` },
+  const li = el('li', { className: `task${t.done ? ' done' : ''}${t.removed ? ' removed' : ''}${t.archived ? ' archived' : ''}` },
     box,
     el('div', { className: 'body' },
       el('div', { className: 'subject', textContent: t.subject }),
       el('div', { className: 'text', textContent: t.text }),
       el('div', { className: 'meta' },
         t.removed && el('span', { className: 'tag danger', textContent: 'прибрано вчителем' }),
+        t.archived && el('span', { className: 'tag', textContent: 'до підключення бота' }),
         t.backdated && el('span', { className: 'tag warn', textContent: 'додано заднім числом' }),
         t.changed && el('span', { className: 'tag warn', textContent: 'змінено' }),
-        !t.done && !t.removed && t.due < today && el('span', { className: 'tag danger', textContent: 'прострочено' }),
+        !t.done && !t.removed && !t.archived && t.due < today && el('span', { className: 'tag danger', textContent: 'прострочено' }),
         t.files > 0 && el('span', { textContent: `📎 ${t.files}` }),
         t.topic && el('span', { textContent: t.topic }))));
   const toggle = async () => {
     if (t.removed) return;
     t.done = !t.done;
     t.changed = false;
+    t.archived = false;
     tg?.HapticFeedback?.impactOccurred('light');
     render();
     try { await api(`/api/tasks/${encodeURIComponent(t.id)}/done`, { done: t.done }); }
@@ -101,11 +103,11 @@ function render() {
   // Прогресс считаем по текущей неделе и дальше, плюс всё несделанное из прошлого.
   const d0 = new Date(today);
   const monday = new Date(d0.getTime() - ((d0.getUTCDay() + 6) % 7) * 86400000).toISOString().slice(0, 10);
-  const live = data.tasks.filter((t) => !t.removed && (t.due >= monday || !t.done));
+  const live = data.tasks.filter((t) => !t.removed && !t.archived && (t.due >= monday || !t.done));
   const doneCount = live.filter((t) => t.done).length;
   const pct = live.length ? Math.round((doneCount / live.length) * 100) : 0;
 
-  const shown = data.tasks.filter((t) => (filter === 'todo' ? !t.done && !t.removed : filter === 'done' ? t.done : true));
+  const shown = data.tasks.filter((t) => (filter === 'todo' ? !t.done && !t.removed && !t.archived : filter === 'done' ? t.done : true));
   const groups = new Map();
   for (const t of shown) {
     const key = filter === 'todo' && t.due < today ? 'overdue' : t.due;

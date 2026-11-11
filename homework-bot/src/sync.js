@@ -49,20 +49,20 @@ export async function syncUser(db, provider, tgId, session, cfg) {
   const now = new Date().toISOString();
 
   const ins = db.prepare(`INSERT INTO tasks
-    (tg_id, task_id, subject, text, topic, due, assigned, files, backdated, first_seen, done, done_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    (tg_id, task_id, subject, text, topic, due, assigned, files, backdated, first_seen, archived)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   // Изменённое задание снова становится несделанным: учитель мог поменять условие.
   const upd = db.prepare(`UPDATE tasks SET subject = ?, text = ?, topic = ?, due = ?, assigned = ?, files = ?,
-    changed = 1, removed = 0, done = 0, done_at = NULL WHERE tg_id = ? AND task_id = ?`);
+    changed = 1, removed = 0, archived = 0, done = 0, done_at = NULL WHERE tg_id = ? AND task_id = ?`);
   const setRemoved = db.prepare('UPDATE tasks SET removed = ? WHERE tg_id = ? AND task_id = ?');
 
   db.exec('BEGIN');
   try {
     for (const t of diff.added) {
-      // При первом входе прошедшие задания считаем сделанными: иначе список начнётся
-      // с десятков «просроченных» за прошлые недели. Галочку можно снять.
+      // При первом входе прошедшие задания уходят в архив: бот не знает, сделаны ли они,
+      // поэтому не показывает их ни как просроченные, ни как сделанные.
       const past = lastSyncDay == null && t.due < today();
-      ins.run(tgId, t.id, t.subject, t.text, t.topic, t.due, t.assigned, t.files, t.backdated ? 1 : 0, now, past ? 1 : 0, past ? now : null);
+      ins.run(tgId, t.id, t.subject, t.text, t.topic, t.due, t.assigned, t.files, t.backdated ? 1 : 0, now, past ? 1 : 0);
     }
     for (const t of diff.changed) upd.run(t.subject, t.text, t.topic, t.due, t.assigned, t.files, tgId, t.id);
     for (const t of diff.restored) setRemoved.run(0, tgId, t.id);

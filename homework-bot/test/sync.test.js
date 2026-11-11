@@ -114,12 +114,36 @@ test('одинаковые задания на разные темы одног�
   assert.equal(out[0].files, 2);
 });
 
-test('первая синхронизация: прошедшие задания сразу отмечены сделанными', async () => {
+test('первая синхронизация: прошедшие задания идут в архив без галочки', async () => {
   const db = openDb(':memory:');
   db.prepare("INSERT INTO users (tg_id, created_at) VALUES (1, 'x')").run();
   const mk = (id, due) => ({ id, subject: 'A', text: id, topic: null, due, assigned: null, files: 0 });
-  const provider = { fetchTasks: async () => [mk('old', '2020-01-01'), mk('new', '2999-01-01')] };
+  let list = [mk('old', '2020-01-01'), mk('new', '2999-01-01')];
+  const provider = { fetchTasks: async () => list };
   await syncUser(db, provider, 1, {}, { daysBack: 1, daysForward: 1 });
-  const done = Object.fromEntries(db.prepare('SELECT task_id, done FROM tasks').all().map((r) => [r.task_id, r.done]));
-  assert.deepEqual(done, { old: 1, new: 0 });
+  const rows = () => Object.fromEntries(db.prepare('SELECT task_id, done, archived FROM tasks').all().map((r) => [r.task_id, [r.done, r.archived]]));
+  assert.deepEqual(rows(), { old: [0, 1], new: [0, 0] });
+  // при следующих синхронизациях прошедшее задание в архив уже не попадает
+  list = [...list, mk('late', '2020-01-02')];
+  await syncUser(db, provider, 1, {}, { daysBack: 1, daysForward: 1 });
+  assert.deepEqual(rows().late, [0, 0]);
+});
+
+test('обновление базы: галочки, поставленные старой версией, снимаются', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const path = mkdtempSync(tmpdir() + '/hw-') + '/db.sqlite';
+  const old = new DatabaseSync(path);
+  old.exec(`CREATE TABLE users (tg_id INTEGER PRIMARY KEY, session TEXT, student_name TEXT, school_name TEXT, last_sync TEXT, sync_error TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE tasks (tg_id INTEGER NOT NULL, task_id TEXT NOT NULL, subject TEXT NOT NULL, text TEXT NOT NULL, topic TEXT, due TEXT NOT NULL, assigned TEXT,
+      files INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0, done_at TEXT, backdated INTEGER NOT NULL DEFAULT 0, changed INTEGER NOT NULL DEFAULT 0,
+      removed INTEGER NOT NULL DEFAULT 0, first_seen TEXT NOT NULL, PRIMARY KEY (tg_id, task_id));
+    INSERT INTO users (tg_id, created_at) VALUES (1, 'x');
+    INSERT INTO tasks (tg_id, task_id, subject, text, due, done, done_at, first_seen) VALUES
+      (1, 'auto', 'A', 't', '2026-11-01', 1, 'T1', 'T1'), (1, 'mine', 'A', 't', '2026-11-12', 1, 'T2', 'T1'), (1, 'todo', 'A', 't', '2026-11-12', 0, NULL, 'T1');`);
+  old.close();
+  const db = openDb(path);
+  const rows = Object.fromEntries(db.prepare('SELECT task_id, done, archived FROM tasks').all().map((r) => [r.task_id, [r.done, r.archived]]));
+  assert.deepEqual(rows, { auto: [0, 1], mine: [1, 0], todo: [0, 0] });
 });

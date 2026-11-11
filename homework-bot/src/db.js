@@ -39,5 +39,13 @@ export function openDb(path) {
       at    INTEGER NOT NULL
     );
   `);
+  // v0.1.1: задания, которые уже прошли к моменту первого входа, идут в архив,
+  // а не в «сделано»: бот не знает, делал ли их ученик.
+  const cols = db.prepare('PRAGMA table_info(tasks)').all().map((c) => c.name);
+  if (!cols.includes('archived')) {
+    db.exec('ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
+    // Прежняя версия ставила таким заданиям галочку сама (done_at = first_seen) — снимаем.
+    db.exec('UPDATE tasks SET archived = 1, done = 0, done_at = NULL WHERE done = 1 AND done_at = first_seen');
+  }
   return db;
 }
