@@ -70,9 +70,10 @@ async function bindIdentity(jar, identity) {
 }
 
 /** Вход по логину и паролю. Возвращает сессию для сохранения (без пароля). */
-export async function login(username, password) {
+export async function login(username, password, log = () => {}) {
   const jar = {};
   const actionId = await discoverLoginAction(jar);
+  log(`форма входа найдена, id действия ${actionId.slice(0, 8)}…`);
 
   const form = new FormData();
   form.set('0', '[null,"$K1"]'); // аргументы серверного действия: (prevState, formData)
@@ -84,14 +85,17 @@ export async function login(username, password) {
     headers: { 'Next-Action': actionId, Accept: 'text/x-component', Origin: PORTAL, Referer: `${PORTAL}/login` },
     body: form,
   });
-  await res.arrayBuffer();
+  const answer = await res.text();
+  log(`ответ на вход: ${res.status}, cookie: ${Object.keys(jar).join(', ') || 'нет'}`);
   if (!jar.session_token && !jar.refresh_token) {
+    log(`начало ответа: ${answer.slice(0, 400)}`);
     throw new EschoolError('bad_credentials', 'Неверный логин или пароль');
   }
 
   const list = await request(jar, `${DIARY}/api/v1/seplogin`);
   if (!list.ok) throw new EschoolError('no_diary', `Дневник не открылся после входа (${list.status})`);
   const items = ((await list.json()).Items ?? []).filter(Boolean);
+  log(`роли в аккаунте: ${items.map((i) => i.role).join(', ') || 'нет'}`);
   const identity = items.find((i) => i.role === 'schoolboy');
   if (!identity) {
     throw new EschoolError('not_student', 'В этом аккаунте нет роли ученика. Нужен логин ученика, а не родителя или учителя');

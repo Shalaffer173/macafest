@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node src/server.js",
     "demo": "DEMO=1 node src/server.js",
+    "check": "node src/check.js",
     "test": "node --test"
   }
 }
