@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { diffTasks, syncUser, describeDiff, schoolYearStart } from '../src/sync.js';
+import { diffTasks, syncUser, describeDiff, schoolYearStart, weekEnd } from '../src/sync.js';
 import { openDb } from '../src/db.js';
 import { encrypt, decrypt, verifyInitData } from '../src/crypto.js';
-import { appointmentsToTasks, mergeDuplicates, findLoginActionId, absorbCookies } from '../src/eschool.js';
+import { appointmentsToTasks, appointmentsToLessons, appointmentsToGrades, mergeDuplicates, findLoginActionId, absorbCookies } from '../src/eschool.js';
 
 const win = { from: '2026-10-01', to: '2026-11-30' };
 const task = (id, o = {}) => ({ id, subject: 'Алгебра', text: '№ 1', topic: null, due: '2026-11-12', assigned: '2026-11-10', files: 0, ...o });
@@ -206,4 +206,101 @@ test('сданный в дневнике ответ отмечает задан�
   db.prepare("UPDATE tasks SET done = 0 WHERE task_id = 'later'").run();
   await syncUser(db, provider, 1, {}, cfg);
   assert.deepEqual(rows().later, [0, 0]);
+});
+
+test('конец недели', () => {
+  assert.equal(weekEnd('2026-11-11'), '2026-11-15'); // среда -> воскресенье
+  assert.equal(weekEnd('2026-11-15'), '2026-11-15');
+  assert.equal(weekEnd('2026-11-16'), '2026-11-22');
+});
+
+test('разбор расписания из ответа дневника', () => {
+  const lessons = appointmentsToLessons([
+    { Id: 1, Date: '2026-11-11T00:00:00', LessonNumber: 2, StartTime: '09:25:00', Duration: 45, Subject: ' Фізика ', RoomNumber: '305',
+      Embed: { Teacher: { LastName: 'Шевчук', FirstName: 'Ірина', SecondName: 'Василівна' }, Topics: [{ Id: 5, Title: '' }, { Id: 6, Title: 'Закони Ньютона' }] } },
+    { Id: 2, Date: '2026-11-11', LessonNumber: 0, StartTime: null, Duration: 0, Subject: 'Хімія', RoomNumber: '0', Canceled: true, CancelReason: 'Хвороба' },
+    { Id: 3, Date: '2026-11-11', LessonNumber: 4, StartTime: '11:25', Subject: 'Хімія', ReplaceId: 77 },
+    { Id: 4, Date: '2026-11-11', LessonNumber: 5, Subject: 'Географія', ReplacementId: 78, CancelReason: 'Заміна' },
+    { Id: 5, Subject: 'Без дати' },
+    null,
+  ]);
+  assert.deepEqual(lessons[0], { id: '1', date: '2026-11-11', number: 2, start: '09:25', duration: 45, subject: 'Фізика', room: '305',
+    teacher: 'Шевчук І. В.', topic: 'Закони Ньютона', status: 'normal', reason: null });
+  assert.deepEqual(lessons.map((l) => [l.id, l.status, l.reason, l.number, l.start, l.duration, l.room]), [
+    ['1', 'normal', null, 2, '09:25', 45, '305'],
+    ['2', 'canceled', 'Хвороба', null, null, 45, null],
+    ['3', 'replacement', null, 4, '11:25', 45, null],
+    ['4', 'replaced', 'Заміна', 5, null, 45, null],
+  ]);
+});
+
+test('разбор оценок из ответа дневника', () => {
+  const grades = appointmentsToGrades([{ Id: 1, Date: '2026-11-10T00:00:00', Subject: 'Алгебра', Embed: { Rates: [
+    { Id: 1, Rate: 10, RateValue: '10', RateType: 'Поточна', Topic: ' Рівняння ', SchoolboyDescription: 'Молодець' },
+    { Id: 2, Rate: 9, RateValue: '9', RateType: 'Тематична', Summary: true, Date: '2026-11-09T00:00:00' },
+    { Id: 3, Rate: 0, RateValue: '', MissingTypeId: 4, MissingType: 'Н' },
+    { Id: 4, Missing: 1 },
+    { Id: 5, Rate: 0, RateValue: 'зарах.' },
+    { Id: 6, Rate: 0, RateValue: '' },
+    { Id: 7, Rate: 11, RateValue: 'одинадцять', RateCategoryId: 6 },
+    null,
+  ] } }]);
+  assert.deepEqual(grades[0], { id: '1', subject: 'Алгебра', date: '2026-11-10', lessonDate: '2026-11-10', label: '10', value: 10,
+    kind: 'current', type: 'Поточна', topic: 'Рівняння', comment: 'Молодець' });
+  assert.deepEqual(grades.map((g) => [g.id, g.kind, g.label, g.value, g.date]), [
+    ['1', 'current', '10', 10, '2026-11-10'],
+    ['2', 'summary', '9', 9, '2026-11-09'],
+    ['3', 'missing', 'Н', null, '2026-11-10'],
+    ['4', 'missing', 'Н', null, '2026-11-10'],
+    ['5', 'current', 'зарах.', null, '2026-11-10'],
+    ['7', 'current', '11', 11, '2026-11-10'],
+  ]);
+});
+
+test('расписание и оценки: первая загрузка молчит и идёт за весь год, новые оценки дают уведомление', async () => {
+  const db = openDb(':memory:');
+  db.prepare("INSERT INTO users (tg_id, created_at) VALUES (1, 'x')").run();
+  const iso = (n) => { const d = new Date(); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const lesson = (id, date, subject = 'Алгебра') => ({ id, date, number: 1, start: '08:30', duration: 45, subject, room: null, teacher: null, topic: null, status: 'normal', reason: null });
+  const grade = (id, date, label, kind = 'current') => ({ id, subject: 'Алгебра', date, lessonDate: date, label, value: Number(label) || null, kind, type: 'Поточна', topic: null, comment: null });
+  let diary = { tasks: [], lessons: [lesson('l1', iso(-2)), lesson('l2', iso(1))], grades: [grade('g1', iso(-2), '9')] };
+  const calls = [];
+  const provider = { fetchDiary: async (_s, from, to) => { calls.push([from, to]); return diary; } };
+  const cfg = { daysBack: 10, daysForward: 14, fullSyncHours: 24 };
+  const count = (table) => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
+
+  // пользователь из прошлой версии: задания уже синхронизировались, а расписания и оценок ещё нет
+  db.prepare('UPDATE users SET last_sync = ?, last_full_sync = ?, covered_from = ? WHERE tg_id = 1')
+    .run(new Date().toISOString(), new Date().toISOString(), schoolYearStart(iso(0)));
+  const first = await syncUser(db, provider, 1, {}, cfg);
+  assert.equal(calls[0][0], schoolYearStart(iso(0)), 'первая загрузка оценок — с начала учебного года');
+  assert.equal(calls[0][1], weekEnd(iso(14)), 'до конца недели');
+  assert.equal(first.gradesSilent, true);
+  assert.equal(describeDiff(first), null);
+  assert.deepEqual([count('lessons'), count('grades')], [2, 1]);
+
+  // вторая синхронизация короткая: появилась оценка, изменилась старая, добавился пропуск, урок отменён
+  diary = {
+    tasks: [],
+    lessons: [lesson('l1', iso(-2)), { ...lesson('l2', iso(1)), status: 'canceled' }, lesson('l3', iso(2), 'Фізика')],
+    grades: [grade('g1', iso(-2), '10'), grade('g2', iso(-1), '11'), grade('g3', iso(-1), 'Н', 'missing')],
+  };
+  const second = await syncUser(db, provider, 1, {}, cfg);
+  assert.equal(calls[1][0], iso(-10));
+  const text = describeDiff(second);
+  assert.match(text, /Оцінка: Алгебра — 11 \(поточна\)/);
+  assert.match(text, /Оцінку змінено: Алгебра — 9 → 10/);
+  assert.doesNotMatch(text, /Н/, 'о пропусках не сообщаем');
+  assert.deepEqual([count('lessons'), count('grades')], [3, 3]);
+  assert.equal(db.prepare("SELECT status FROM lessons WHERE lesson_id = 'l2'").get().status, 'canceled');
+
+  // оценку удалили в дневнике — она исчезает и у нас, без уведомления
+  diary = { ...diary, grades: [grade('g1', iso(-2), '10')] };
+  const third = await syncUser(db, provider, 1, {}, cfg);
+  assert.equal(describeDiff(third), null);
+  assert.equal(count('grades'), 1);
+
+  // удаление пользователя стирает расписание и оценки
+  db.prepare('DELETE FROM users WHERE tg_id = 1').run();
+  assert.deepEqual([count('lessons'), count('grades')], [0, 0]);
 });

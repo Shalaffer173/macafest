@@ -1,7 +1,7 @@
 // Проверка связи с «Єдиною Школою» без Telegram и сервера: npm run check
-// Спрашивает логин и пароль, входит и печатает задания. Ничего не сохраняет.
+// Спрашивает логин и пароль, входит и печатает задания, расписание и оценки. Ничего не сохраняет.
 import { createInterface } from 'node:readline';
-import { login, fetchTasks, setTrace } from './eschool.js';
+import { login, fetchDiary, setTrace } from './eschool.js';
 
 setTrace((m) => console.log(`   · ${m}`));
 
@@ -26,9 +26,24 @@ try {
   const session = await login(username, password, (m) => console.log(`   ${m}`));
   console.log(`   OK: ${session.studentName ?? 'имя не получено'}, ${session.schoolName ?? 'школа не получена'}`);
 
-  console.log('2. Загрузка заданий за 2 недели назад и 2 вперёд…');
-  const tasks = await fetchTasks(session, shift(-14), shift(14));
-  console.log(`   OK: заданий найдено ${tasks.length}, из них с ответом ученика ${tasks.filter((t) => t.answered).length}, с файлами ${tasks.filter((t) => t.files > 0).length}`);
+  console.log('2. Загрузка дневника за 2 недели назад и 2 вперёд…');
+  const { tasks, lessons, grades } = await fetchDiary(session, shift(-14), shift(14));
+  console.log(`   OK: заданий ${tasks.length} (с ответом ученика ${tasks.filter((t) => t.answered).length}), уроков ${lessons.length}, оценок и пропусков ${grades.length}`);
+
+  const today = shift(0);
+  console.log(`\n3. Расписание на сегодня (${today}):`);
+  const todays = lessons.filter((l) => l.date === today).sort((a, b) => (a.number ?? 99) - (b.number ?? 99));
+  if (!todays.length) console.log('   уроков нет');
+  for (const l of todays) {
+    console.log(`   ${l.number ?? '-'}. ${l.start ?? '--:--'} (${l.duration} мин) ${l.subject} | каб. ${l.room ?? '-'} | ${l.teacher ?? '-'} | ${l.status}`);
+  }
+
+  console.log('\n4. Последние оценки:');
+  for (const g of grades.sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 8)) {
+    console.log(`   ${g.date} ${g.subject}: ${g.label} [${g.kind}${g.type ? `, ${g.type}` : ''}${g.value != null ? `, число ${g.value}` : ''}]`);
+  }
+
+  console.log('\n5. Задания:');
   for (const t of tasks.sort((a, b) => (a.due < b.due ? -1 : 1))) {
     console.log(`   ${t.due} ${t.answered ? '✓' : ' '} ${t.subject}: ${t.text.replace(/\s+/g, ' ').slice(0, 80)}`);
   }

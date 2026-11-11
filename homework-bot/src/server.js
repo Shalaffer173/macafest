@@ -35,7 +35,7 @@ async function runSync(tgId, { notify }) {
     try {
       const result = await syncUser(db, provider, tgId, session, config);
       saveSession(tgId, session); // токены могли обновиться
-      console.log(`[sync] ${tgId}: ${result.from}..${result.to}, заданий ${result.fetched}, с ответом ${result.answered}, новых ${result.diff.added.length}`);
+      console.log(`[sync] ${tgId}: ${result.from}..${result.to}, заданий ${result.fetched}, с ответом ${result.answered}, новых ${result.diff.added.length}; уроков ${result.lessons}, оценок ${result.gradesTotal}, новых оценок ${result.grades.added.length}`);
       const text = notify && describeDiff(result);
       if (text && bot) await bot.send(tgId, text, true);
       return result;
@@ -80,13 +80,27 @@ function authUser(req) {
   return verifyInitData(req.headers['x-telegram-init-data'], config.botToken);
 }
 
+/** Понедельник прошлой недели: расписание старше этого приложению не нужно. */
+function scheduleFrom() {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7) - 7);
+  return d.toISOString().slice(0, 10);
+}
+
 function state(tgId) {
   const u = db.prepare('SELECT session, student_name, school_name, last_sync, sync_error FROM users WHERE tg_id = ?').get(tgId);
   if (!u?.session) return { loggedIn: false, error: u?.sync_error ?? null };
   const tasks = db.prepare(`SELECT task_id AS id, subject, text, topic, due, assigned, files, done, backdated, changed, removed, archived, answered
     FROM tasks WHERE tg_id = ? ORDER BY due, subject`).all(tgId)
     .map((t) => ({ ...t, done: !!t.done, backdated: !!t.backdated, changed: !!t.changed, removed: !!t.removed, archived: !!t.archived, answered: !!t.answered }));
-  return { loggedIn: true, student: u.student_name, school: u.school_name, lastSync: u.last_sync, error: u.sync_error, syncing: running.has(tgId), tasks };
+  const lessons = db.prepare(`SELECT lesson_id AS id, date, number, start, duration, subject, room, teacher, topic, status, reason
+    FROM lessons WHERE tg_id = ? AND date >= ? ORDER BY date, number, start`).all(tgId, scheduleFrom());
+  const grades = db.prepare(`SELECT grade_id AS id, subject, date, label, value, kind, type, topic, comment
+    FROM grades WHERE tg_id = ? ORDER BY date DESC, grade_id DESC`).all(tgId);
+  return {
+    loggedIn: true, student: u.student_name, school: u.school_name, lastSync: u.last_sync, error: u.sync_error,
+    syncing: running.has(tgId), tasks, lessons, grades,
+  };
 }
 
 // Защита от подбора пароля: не больше 5 неверных паролей в час. Считаются только отказы
@@ -106,6 +120,8 @@ async function handleApi(req, res, path) {
   const tgId = user.id;
 
   if (req.method === 'GET' && path === '/api/state') return send(res, 200, state(tgId));
+  // Короткий ответ для опроса во время синхронизации, чтобы не гонять весь список каждые 2 секунды.
+  if (req.method === 'GET' && path === '/api/status') return send(res, 200, { syncing: running.has(tgId) });
 
   if (req.method === 'POST' && path === '/api/login') {
     const { username, password } = await readJson(req);

@@ -1,9 +1,9 @@
 {
   "name": "homework-bot",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Telegram-бот с мини-приложением: список домашних заданий из «Єдиної Школи»",
+  "description": "Telegram-бот с мини-приложением: домашние задания, расписание и оценки из «Єдиної Школи»",
   "engines": { "node": ">=22.9" },
   "scripts": {
     "start": "node --env-file-if-exists=.env src/server.js",

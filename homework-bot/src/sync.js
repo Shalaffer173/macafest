@@ -1,5 +1,6 @@
 // Синхронизация: сравнивает свежий список заданий с сохранённым и находит
 // новые, изменённые и удалённые. Галочки «сделано» хранятся только у нас.
+// Заодно сохраняет расписание и оценки и находит новые оценки.
 
 /**
  * Чистая функция сравнения.
@@ -35,6 +36,39 @@ function shift(iso, n) {
   return d.toISOString().slice(0, 10);
 }
 
+/** Воскресенье той недели, в которую попадает дата: расписание удобнее хранить целыми неделями. */
+export function weekEnd(iso) {
+  const dow = (new Date(`${iso}T00:00:00Z`).getUTCDay() + 6) % 7; // 0 = понедельник
+  return shift(iso, 6 - dow);
+}
+
+/** Заменяет расписание пользователя за период [from, to] свежим. */
+function replaceLessons(db, tgId, lessons, from, to) {
+  db.prepare('DELETE FROM lessons WHERE tg_id = ? AND date BETWEEN ? AND ?').run(tgId, from, to);
+  const ins = db.prepare(`INSERT OR REPLACE INTO lessons
+    (tg_id, lesson_id, date, number, start, duration, subject, room, teacher, topic, status, reason)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  for (const l of lessons) {
+    ins.run(tgId, l.id, l.date, l.number, l.start, l.duration, l.subject, l.room, l.teacher, l.topic, l.status, l.reason);
+  }
+}
+
+/** Заменяет оценки за период [from, to] и возвращает появившиеся и изменённые. */
+function replaceGrades(db, tgId, grades, from, to) {
+  const old = new Map(db.prepare('SELECT grade_id, label FROM grades WHERE tg_id = ?').all(tgId).map((r) => [r.grade_id, r.label]));
+  db.prepare('DELETE FROM grades WHERE tg_id = ? AND lesson_date BETWEEN ? AND ?').run(tgId, from, to);
+  const ins = db.prepare(`INSERT OR REPLACE INTO grades
+    (tg_id, grade_id, subject, date, lesson_date, label, value, kind, type, topic, comment)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const added = [], changed = [];
+  for (const g of grades) {
+    ins.run(tgId, g.id, g.subject, g.date, g.lessonDate, g.label, g.value, g.kind, g.type, g.topic, g.comment);
+    if (!old.has(g.id)) added.push(g);
+    else if (old.get(g.id) !== g.label) changed.push({ ...g, oldLabel: old.get(g.id) });
+  }
+  return { added, changed };
+}
+
 /** 1 сентября текущего учебного года. */
 export function schoolYearStart(todayIso) {
   const y = Number(todayIso.slice(0, 4));
@@ -43,18 +77,26 @@ export function schoolYearStart(todayIso) {
 
 /** Одна синхронизация пользователя. Возвращает { diff, first } для уведомлений. */
 export async function syncUser(db, provider, tgId, session, cfg) {
-  const user = db.prepare('SELECT last_sync, covered_from, last_full_sync FROM users WHERE tg_id = ?').get(tgId);
+  const user = db.prepare('SELECT last_sync, covered_from, last_full_sync, extras_synced FROM users WHERE tg_id = ?').get(tgId);
   const lastSyncDay = user?.last_sync ? user.last_sync.slice(0, 10) : null;
+  // Расписание и оценки умеет отдавать не каждый источник (в тестах — только задания).
+  const hasExtras = typeof provider.fetchDiary === 'function';
+  // Первая загрузка оценок идёт за весь год и молча: иначе каждая старая оценка стала бы «новой».
+  const extrasFirst = hasExtras && !user?.extras_synced;
   // Обычно перечитываем последние недели, а раз в сутки и при первом входе — весь учебный год.
-  const fullDue = !user?.last_full_sync || Date.now() - Date.parse(user.last_full_sync) > (cfg.fullSyncHours ?? 24) * 3600_000;
+  const fullDue = extrasFirst || !user?.last_full_sync
+    || Date.now() - Date.parse(user.last_full_sync) > (cfg.fullSyncHours ?? 24) * 3600_000;
   const recent = shift(today(), -cfg.daysBack);
   const yearStart = schoolYearStart(today());
   const from = fullDue && yearStart < recent ? yearStart : recent;
-  const to = shift(today(), cfg.daysForward);
+  const to = weekEnd(shift(today(), cfg.daysForward));
   // Всё, что старше этой даты, бот раньше не загружал: такие задания не «новые», а архив.
   const archiveBefore = user?.covered_from ?? today();
 
-  const fetched = await provider.fetchTasks(session, from, to);
+  const diary = hasExtras
+    ? await provider.fetchDiary(session, from, to)
+    : { tasks: await provider.fetchTasks(session, from, to) };
+  const fetched = diary.tasks;
   const rows = db.prepare('SELECT * FROM tasks WHERE tg_id = ?').all(tgId);
   const existing = new Map(rows.map((r) => [r.task_id, r]));
   const diff = diffTasks(existing, fetched, { lastSyncDay, from, to });
@@ -71,6 +113,7 @@ export async function syncUser(db, provider, tgId, session, cfg) {
   const upd = db.prepare(`UPDATE tasks SET subject = ?, text = ?, topic = ?, due = ?, assigned = ?, files = ?,
     changed = 1, removed = 0, archived = 0, done = 0, done_at = NULL WHERE tg_id = ? AND task_id = ?`);
   const setRemoved = db.prepare('UPDATE tasks SET removed = ? WHERE tg_id = ? AND task_id = ?');
+  let grades = { added: [], changed: [] };
 
   db.exec('BEGIN');
   try {
@@ -86,22 +129,34 @@ export async function syncUser(db, provider, tgId, session, cfg) {
     for (const t of diff.restored) setRemoved.run(0, tgId, t.id);
     for (const t of diff.removed) setRemoved.run(1, tgId, t.task_id);
     for (const t of fetched) if (t.answered && existing.has(t.id)) setAnswered.run(now, tgId, t.id);
+    if (diary.lessons) replaceLessons(db, tgId, diary.lessons, from, to);
+    if (diary.grades) grades = replaceGrades(db, tgId, diary.grades, from, to);
     const covered = user?.covered_from && user.covered_from < from ? user.covered_from : from;
-    db.prepare('UPDATE users SET last_sync = ?, sync_error = NULL, covered_from = ?, last_full_sync = ? WHERE tg_id = ?')
-      .run(now, covered, from === yearStart || yearStart >= recent ? now : user?.last_full_sync ?? null, tgId);
+    db.prepare(`UPDATE users SET last_sync = ?, sync_error = NULL, covered_from = ?, last_full_sync = ?, extras_synced = ?
+      WHERE tg_id = ?`)
+      .run(now, covered, from === yearStart || yearStart >= recent ? now : user?.last_full_sync ?? null,
+        hasExtras || user?.extras_synced ? 1 : 0, tgId);
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
     throw e;
   }
-  return { diff, first: lastSyncDay == null, from, to, fetched: fetched.length, answered: fetched.filter((t) => t.answered).length };
+  return {
+    diff, grades, from, to,
+    first: lastSyncDay == null,
+    gradesSilent: extrasFirst, // оценки загружены впервые — о них не сообщаем
+    fetched: fetched.length,
+    answered: fetched.filter((t) => t.answered).length,
+    lessons: diary.lessons?.length ?? 0,
+    gradesTotal: diary.grades?.length ?? 0,
+  };
 }
 
 const fmt = (iso) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
 const cut = (s, n = 120) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 /** Текст уведомления о результатах синхронизации или null, если сообщать нечего. */
-export function describeDiff({ diff, first }) {
+export function describeDiff({ diff, first, grades, gradesSilent }) {
   if (first) return null; // при первом входе всё «новое», не шумим
   const lines = [];
   for (const t of diff.added) {
@@ -112,6 +167,16 @@ export function describeDiff({ diff, first }) {
   }
   for (const t of diff.changed) lines.push(`✏️ Змінено: ${t.subject} на ${fmt(t.due)}\n${cut(t.text)}`);
   for (const t of diff.removed) lines.push(`🗑 Прибрано: ${t.subject} на ${fmt(t.due)}`);
+  if (grades && !gradesSilent) {
+    // Об отметках об отсутствии не пишем: их много, и это не оценка.
+    const kind = (g) => (g.type ? ` (${g.type.toLowerCase()})` : '');
+    for (const g of grades.added) {
+      if (g.kind !== 'missing') lines.push(`📊 Оцінка: ${g.subject} — ${g.label}${kind(g)} за ${fmt(g.date)}`);
+    }
+    for (const g of grades.changed) {
+      if (g.kind !== 'missing') lines.push(`📊 Оцінку змінено: ${g.subject} — ${g.oldLabel} → ${g.label}${kind(g)} за ${fmt(g.date)}`);
+    }
+  }
   if (!lines.length) return null;
   return lines.slice(0, 10).join('\n\n') + (lines.length > 10 ? `\n\n…і ще ${lines.length - 10}` : '');
 }

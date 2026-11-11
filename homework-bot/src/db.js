@@ -34,6 +34,36 @@ export function openDb(path) {
       first_seen TEXT NOT NULL,
       PRIMARY KEY (tg_id, task_id)
     );
+    CREATE TABLE IF NOT EXISTS lessons (
+      tg_id     INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
+      lesson_id TEXT NOT NULL,
+      date      TEXT NOT NULL,       -- YYYY-MM-DD
+      number    INTEGER,             -- номер урока
+      start     TEXT,                -- HH:MM
+      duration  INTEGER,             -- минуты
+      subject   TEXT NOT NULL,
+      room      TEXT,
+      teacher   TEXT,
+      topic     TEXT,
+      status    TEXT NOT NULL DEFAULT 'normal', -- normal | canceled | replacement | replaced
+      reason    TEXT,
+      PRIMARY KEY (tg_id, lesson_id)
+    );
+    CREATE INDEX IF NOT EXISTS lessons_by_date ON lessons (tg_id, date);
+    CREATE TABLE IF NOT EXISTS grades (
+      tg_id       INTEGER NOT NULL REFERENCES users(tg_id) ON DELETE CASCADE,
+      grade_id    TEXT NOT NULL,
+      subject     TEXT NOT NULL,
+      date        TEXT NOT NULL,     -- дата оценки
+      lesson_date TEXT NOT NULL,     -- дата урока, к которому она привязана
+      label       TEXT NOT NULL,     -- что показывать: «10», «зарах.», «Н»
+      value       REAL,              -- число для среднего балла или NULL
+      kind        TEXT NOT NULL,     -- current | summary | missing
+      type        TEXT,              -- «Поточна», «Тематична»…
+      topic       TEXT,
+      comment     TEXT,
+      PRIMARY KEY (tg_id, grade_id)
+    );
     CREATE TABLE IF NOT EXISTS login_attempts (
       tg_id INTEGER NOT NULL,
       at    INTEGER NOT NULL
@@ -52,6 +82,10 @@ export function openDb(path) {
   if (!ucols.includes('covered_from')) {
     db.exec('ALTER TABLE users ADD COLUMN covered_from TEXT');   // с какой даты задания уже загружались
     db.exec('ALTER TABLE users ADD COLUMN last_full_sync TEXT'); // когда последний раз перечитан весь год
+  }
+  // v0.2: расписание и оценки. extras_synced = 0, пока они ни разу не загружались целиком
+  if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'extras_synced')) {
+    db.exec('ALTER TABLE users ADD COLUMN extras_synced INTEGER NOT NULL DEFAULT 0');
   }
   // v0.1.3: задания, по которым ученик сдал ответ в дневнике, отмечаются сделанными
   if (!db.prepare('PRAGMA table_info(tasks)').all().some((c) => c.name === 'answered')) {

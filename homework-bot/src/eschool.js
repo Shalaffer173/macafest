@@ -204,8 +204,88 @@ function addDays(iso, n) {
   return d.toISOString().slice(0, 10);
 }
 
-/** Задания за период [from, to]. Сайт сам запрашивает по неделе, делаем так же. */
-export async function fetchTasks(session, from, to) {
+const clean = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
+
+/** «Прізвище І. П.» из данных учителя. */
+function teacherName(t) {
+  if (!t) return null;
+  const initials = [t.FirstName, t.SecondName].map(clean).filter(Boolean).map((n) => `${n[0]}.`).join(' ');
+  return [clean(t.LastName), initials].filter(Boolean).join(' ') || null;
+}
+
+/** Уроки из ответа дневника -> расписание. Правила статусов те же, что на сайте. */
+export function appointmentsToLessons(appointments) {
+  const lessons = new Map();
+  for (const a of appointments ?? []) {
+    if (!a || !day(a.Date)) continue;
+    const room = clean(a.RoomNumber);
+    const topic = (a.Embed?.Topics ?? []).map((t) => clean(t?.Title)).find(Boolean)
+      ?? (a.Embed?.Rates ?? []).map((r) => clean(r?.Topic)).find(Boolean) ?? null;
+    let status = 'normal';
+    if (a.Canceled === true) status = 'canceled';
+    else if (a.ReplaceId > 0) status = 'replacement'; // этот урок поставлен вместо другого
+    else if (a.ReplacementId > 0) status = 'replaced'; // вместо этого урока поставлен другой
+    lessons.set(String(a.Id), {
+      id: String(a.Id),
+      date: day(a.Date),
+      number: a.LessonNumber > 0 ? a.LessonNumber : null,
+      start: typeof a.StartTime === 'string' && /^\d{2}:\d{2}/.test(a.StartTime) ? a.StartTime.slice(0, 5) : null,
+      duration: a.Duration > 0 ? a.Duration : 45,
+      subject: clean(a.Subject) ?? 'Без предмета',
+      room: room === '0' ? null : room,
+      teacher: teacherName(a.Embed?.Teacher),
+      topic,
+      status,
+      reason: status === 'canceled' || status === 'replaced' ? clean(a.CancelReason) : null,
+    });
+  }
+  return [...lessons.values()];
+}
+
+/**
+ * Оценки и отметки об отсутствии из ответа дневника. Отбор и подписи повторяют сайт:
+ * kind = current (текущая), summary (итоговая: тематическая, семестровая) или missing (пропуск).
+ * value — число для среднего балла; в среднее идут только текущие оценки.
+ */
+export function appointmentsToGrades(appointments) {
+  const grades = new Map();
+  for (const a of appointments ?? []) {
+    if (!a) continue;
+    for (const r of a.Embed?.Rates ?? []) {
+      if (!r) continue;
+      const lessonDate = day(a.Date);
+      const date = day(r.Date) ?? lessonDate;
+      if (!date || !lessonDate) continue;
+      const rate = typeof r.Rate === 'number' && Number.isFinite(r.Rate) && r.Rate !== 0 ? r.Rate : null;
+      let kind, label;
+      if (r.MissingTypeId != null || r.Missing > 0) {
+        kind = 'missing';
+        label = clean(r.MissingType) ?? 'Н';
+      } else {
+        kind = r.Summary === true ? 'summary' : 'current';
+        // Категория 6 на сайте — числовая оценка: показывается само число.
+        label = r.RateCategoryId === 6 && rate != null ? String(rate) : clean(r.RateValue) ?? (rate != null ? String(rate) : null);
+        if (label == null) continue; // пустая запись без оценки
+      }
+      grades.set(String(r.Id), {
+        id: String(r.Id),
+        subject: clean(a.Subject) ?? clean(r.Subject) ?? 'Без предмета',
+        date,
+        lessonDate,
+        label,
+        value: kind === 'missing' ? null : rate,
+        kind,
+        type: clean(r.RateType),
+        topic: clean(r.Topic),
+        comment: clean(r.SchoolboyDescription),
+      });
+    }
+  }
+  return [...grades.values()];
+}
+
+/** Всё за период [from, to]: задания, расписание и оценки. Сайт запрашивает по неделе, делаем так же. */
+export async function fetchDiary(session, from, to) {
   const all = [];
   for (let start = from; start <= to; start = addDays(start, 7)) {
     const end = addDays(start, 6) < to ? addDays(start, 6) : to;
@@ -215,5 +295,5 @@ export async function fetchTasks(session, from, to) {
     all.push(...(data.Items ?? []));
     await new Promise((r) => setTimeout(r, 200)); // не частим
   }
-  return appointmentsToTasks(all);
+  return { tasks: appointmentsToTasks(all), lessons: appointmentsToLessons(all), grades: appointmentsToGrades(all) };
 }
