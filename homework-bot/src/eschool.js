@@ -18,13 +18,16 @@ export class EschoolError extends Error {
 
 /** Мини-хранилище cookie: имя -> значение. Все нужные cookie живут на .eschool-ua.com. */
 export function absorbCookies(jar, res) {
+  // Сайт в одном ответе и выдаёт cookie, и удаляет одноимённую старую (с другим доменом).
+  // Домены мы не различаем, поэтому сначала применяем удаления, потом установки.
+  const set = {};
   for (const line of res.headers.getSetCookie?.() ?? []) {
     const m = /^([^=;\s]+)=([^;]*)/.exec(line);
     if (!m) continue;
     const expired = /max-age=(0|-\d+)/i.test(line) || m[2] === '';
-    if (expired) delete jar[m[1]]; else jar[m[1]] = m[2];
+    if (expired) delete jar[m[1]]; else set[m[1]] = m[2];
   }
-  return jar;
+  return Object.assign(jar, set);
 }
 const cookieHeader = (jar) => Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
 

@@ -100,4 +100,8 @@ test('поиск id действия входа и разбор cookie', () => {
   const jar = { old: '1', refresh_token: 'x' };
   absorbCookies(jar, { headers: { getSetCookie: () => ['session_token=abc; Path=/; HttpOnly', 'refresh_token=; Max-Age=-1'] } });
   assert.deepEqual(jar, { old: '1', session_token: 'abc' });
+  // выдача и удаление одноимённой cookie в одном ответе: остаётся выданная
+  const jar2 = {};
+  absorbCookies(jar2, { headers: { getSetCookie: () => ['application_token=tok; Domain=.eschool-ua.com', 'application_token=; Max-Age=0; Path=/'] } });
+  assert.deepEqual(jar2, { application_token: 'tok' });
 });
