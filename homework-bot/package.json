@@ -11,6 +11,7 @@
     "tunnel": "node src/dev-tunnel.js",
     "autostart": "bash scripts/autostart.sh",
     "check": "node src/check.js",
+    "users": "node --no-warnings --env-file-if-exists=.env src/users.js",
     "test": "node --test"
   }
 }

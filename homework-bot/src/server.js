@@ -17,7 +17,18 @@ const db = openDb(config.dbPath);
 const WEB = fileURLToPath(new URL('../web/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
 
-const deleteUser = (tgId) => db.prepare('DELETE FROM users WHERE tg_id = ?').run(tgId);
+// «Стереть мои данные» убирает всё, включая запись о том, что человек писал боту.
+const deleteUser = (tgId) => {
+  db.prepare('DELETE FROM users WHERE tg_id = ?').run(tgId);
+  db.prepare('DELETE FROM visitors WHERE tg_id = ?').run(tgId);
+};
+function noteVisitor(from) {
+  if (!from?.id) return;
+  const now = new Date().toISOString();
+  db.prepare(`INSERT INTO visitors (tg_id, name, username, first_at, last_at, messages) VALUES (?, ?, ?, ?, ?, 1)
+    ON CONFLICT(tg_id) DO UPDATE SET name = excluded.name, username = excluded.username, last_at = excluded.last_at, messages = messages + 1`)
+    .run(from.id, [from.first_name, from.last_name].filter(Boolean).join(' ') || null, from.username ?? null, now, now);
+}
 const loggedIn = (tgId) => !!db.prepare('SELECT 1 FROM users WHERE tg_id = ? AND session IS NOT NULL').get(tgId);
 const needLogin = { text: 'Спершу увійди в щоденник: відкрий застосунок кнопкою нижче.', button: true };
 
@@ -59,7 +70,7 @@ const commands = {
     },
   },
 };
-const bot = config.demo ? null : createBot(config.botToken, { publicUrl: config.publicUrl, commands });
+const bot = config.demo ? null : createBot(config.botToken, { publicUrl: config.publicUrl, commands, onMessage: noteVisitor });
 
 // ---------- сессии ----------
 const loadSession = (row) => (row?.session ? JSON.parse(decrypt(row.session, config.secretKey)) : null);

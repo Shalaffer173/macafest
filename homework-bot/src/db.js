@@ -64,6 +64,15 @@ export function openDb(path) {
       comment     TEXT,
       PRIMARY KEY (tg_id, grade_id)
     );
+    -- все, кто писал боту в чате, даже если не входил в дневник
+    CREATE TABLE IF NOT EXISTS visitors (
+      tg_id    INTEGER PRIMARY KEY,
+      name     TEXT,              -- имя в Telegram
+      username TEXT,              -- @ник, если есть
+      first_at TEXT NOT NULL,
+      last_at  TEXT NOT NULL,
+      messages INTEGER NOT NULL DEFAULT 0
+    );
     CREATE TABLE IF NOT EXISTS login_attempts (
       tg_id INTEGER NOT NULL,
       at    INTEGER NOT NULL

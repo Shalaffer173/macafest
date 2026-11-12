@@ -2,7 +2,8 @@
 //
 // commands: { '/today': { description, run: async (tgId) => ({ text, button }) }, ... }
 // Команды с description показываются в меню бота.
-export function createBot(token, { publicUrl, commands = {} }) {
+// onMessage(from) вызывается на каждое личное сообщение — чтобы знать, кто запускал бота.
+export function createBot(token, { publicUrl, commands = {}, onMessage }) {
   const base = `https://api.telegram.org/bot${token}`;
 
   async function call(method, body, timeout = 15000) {
@@ -37,6 +38,7 @@ export function createBot(token, { publicUrl, commands = {} }) {
   async function handle(update) {
     const msg = update.message;
     if (!msg?.text || msg.chat.type !== 'private') return;
+    onMessage?.(msg.from);
     const cmd = msg.text.split(/[\s@]/)[0].toLowerCase();
     if (cmd === '/start' || cmd === '/help') return send(msg.chat.id, help(), true);
     if (commands[cmd]) {

@@ -564,6 +564,7 @@ test('расписание на день и вечерняя сводка', () =
 
 test('бот в чате: команды, справка и неизвестные сообщения', async () => {
   const sent = [];
+  const seen = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
     sent.push({ method: String(url).split('/').pop(), ...JSON.parse(init.body) });
@@ -572,6 +573,7 @@ test('бот в чате: команды, справка и неизвестны
   try {
     const bot = createBot('1:x', {
       publicUrl: 'https://app.example',
+      onMessage: (from) => seen.push(from.id),
       commands: {
         '/today': { description: 'розклад на сьогодні', run: async (id) => ({ text: `розклад для ${id}` }) },
         '/hidden': { run: async () => ({ text: 'секрет', button: true }) },
@@ -584,6 +586,7 @@ test('бот в чате: команды, справка и неизвестны
     await bot.handle(msg('привіт'));
     await bot.handle(msg('/today', 'group')); // в группах бот молчит
     assert.equal(sent.length, 4);
+    assert.deepEqual(seen, [5, 5, 5, 5], 'каждое личное сообщение отмечается, групповые — нет');
     assert.deepEqual([sent[0].text, sent[1].text], ['розклад для 5', 'розклад для 5']);
     assert.equal(sent[0].reply_markup, undefined);
     assert.match(sent[2].text, /\/today — розклад на сьогодні/);
