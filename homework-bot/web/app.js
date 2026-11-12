@@ -250,50 +250,154 @@ function renderSchedule(today) {
 }
 
 // ---------- вкладка «Оцінки» ----------
+// Устроена как раздел успеваемости в приложении «Єдиної Школи»: пропуски, список предметов
+// с ожидаемой оценкой за семестр, а по нажатию — страница предмета с оценками по месяцам.
 
-const num = (v) => v.toLocaleString('uk-UA', { maximumFractionDigits: 1 });
+let subject = null; // предмет, открытый на вкладке «Оцінки»
+const MONTHS = ['Січень', 'Лютий', 'Березень', 'Квітень', 'Травень', 'Червень', 'Липень', 'Серпень', 'Вересень', 'Жовтень', 'Листопад', 'Грудень'];
+const monthName = (key) => MONTHS[Number(key.slice(5, 7)) - 1];
+const fmt1 = (v) => (v == null ? '—' : v.toFixed(1)); // 10.8, как в приложении
+const semesterOf = (iso) => (iso.slice(5, 7) >= '09' ? 1 : 2); // 1-й: сентябрь–декабрь, 2-й: январь–август
+
+/** Средний балл как на сайте дневника: по текущим оценкам, а если их нет — по тематическим и итоговым. */
 function average(grades) {
-  const values = grades.filter((g) => g.kind === 'current' && g.value != null).map((g) => g.value);
-  return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
+  const mean = (kind) => {
+    const values = grades.filter((g) => g.kind === kind && g.value != null).map((g) => g.value);
+    return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
+  };
+  return mean('current') ?? mean('summary');
 }
+
 /** Цвет по 12-балльной шкале: высокие зелёным, низкие предупреждающим. */
 function tone(g) {
   if (g.kind === 'missing') return 'missing';
   const scale = g.value == null ? '' : g.value >= 10 ? ' ok' : g.value <= 3 ? ' danger' : g.value <= 6 ? ' warn' : '';
   return `${g.kind === 'summary' ? 'final' : ''}${scale}`;
 }
-const chip = (g) => {
-  const c = el('span', { className: `chip ${tone(g)}`, textContent: g.label });
-  c.title = [shortDate(g.date), g.type].filter(Boolean).join(' · ');
-  return c;
-};
+const chip = (g) => el('span', { className: `chip ${tone(g)}`, textContent: g.label });
+const tile = (value, label) => el('div', { className: 'tile' },
+  el('div', { className: 'value', textContent: value }),
+  el('div', { className: 'label', textContent: label }));
 
-function renderGrades() {
+function svg(tag, attrs = {}, ...children) {
+  const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  node.append(...children);
+  return node;
+}
+
+/**
+ * График текущих оценок за месяц: одна линия по шкале 0–12, точки равномерно по ширине.
+ * Подписи на точках не ставим — все значения перечислены под графиком; строка под графиком
+ * показывает выбранную точку (касание, наведение или клавиатура).
+ */
+function monthChart(points, title) {
+  const W = 320, H = 120, left = 24, right = 12, top = 8, bottom = 8;
+  const x = (i) => left + (i * (W - left - right)) / (points.length - 1);
+  const y = (v) => top + ((12 - v) * (H - top - bottom)) / 12;
+  const describe = (g) => [shortDate(g.date), g.label, g.type].filter(Boolean).join(' · ');
+  const readout = el('div', { className: 'readout', textContent: describe(points[points.length - 1]) });
+  const line = points.map((g, i) => `${x(i)},${y(g.value)}`).join(' ');
+
+  const dots = points.map((g, i) => svg('circle', { class: 'dot', cx: x(i), cy: y(g.value), r: 4 }));
+  const select = (i) => {
+    readout.textContent = describe(points[i]);
+    dots.forEach((d, k) => d.setAttribute('r', k === i ? 6 : 4));
+  };
+  const hits = points.map((g, i) => {
+    const hit = svg('circle', { class: 'hit', cx: x(i), cy: y(g.value), r: 16, tabindex: 0, role: 'img', 'aria-label': describe(g) });
+    for (const type of ['pointerenter', 'focus', 'click']) hit.addEventListener(type, () => select(i));
+    return hit;
+  });
+
+  return el('div', { className: 'chart' },
+    svg('svg', { viewBox: `0 0 ${W} ${H}`, role: 'group', 'aria-label': `${title}: ${points.map((g) => g.label).join(', ')}` },
+      ...[0, 4, 8, 12].flatMap((v) => [
+        svg('line', { class: 'grid', x1: left, x2: W - right, y1: y(v), y2: y(v) }),
+        svg('text', { class: 'tick', x: left - 6, y: y(v) + 3.5, 'text-anchor': 'end' }, String(v)),
+      ]),
+      svg('polygon', { class: 'area', points: `${x(0)},${y(0)} ${line} ${x(points.length - 1)},${y(0)}` }),
+      svg('polyline', { class: 'line', points: line }),
+      ...dots, ...hits),
+    readout);
+}
+
+function renderSubject(name, today) {
+  const list = data.grades.filter((g) => g.subject === name); // от новых к старым
+  const months = [...new Set(list.map((g) => g.date.slice(0, 7)))]; // тоже от новых к старым
+  const inMonth = (key) => list.filter((g) => g.date.startsWith(key));
+  // «Месяц» — последний месяц, в котором есть оценки (в текущем их может ещё не быть).
+  const lastGraded = months.find((key) => average(inMonth(key)) != null);
+
+  const back = el('button', { className: 'back', textContent: '‹ Усі предмети' });
+  back.addEventListener('click', () => { subject = null; render(); });
+
+  return [
+    back,
+    el('h2', { className: 'title', textContent: name }),
+    el('div', { className: 'tiles three' },
+      tile(fmt1(lastGraded ? average(inMonth(lastGraded)) : null), lastGraded ? monthName(lastGraded) : 'Місяць'),
+      tile(fmt1(average(list.filter((g) => semesterOf(g.date) === semesterOf(today)))), 'Семестр'),
+      tile(fmt1(average(list)), 'Рік')),
+    ...months.map((key) => {
+      const all = inMonth(key).slice().reverse(); // по порядку дат
+      const current = all.filter((g) => g.kind !== 'summary');
+      const plotted = current.filter((g) => g.kind === 'current' && g.value != null);
+      const finals = all.filter((g) => g.kind === 'summary');
+      return el('section', { className: 'card month' },
+        el('div', { className: 'row' },
+          el('span', { className: 'subject', textContent: monthName(key) }),
+          el('span', { className: 'avg', textContent: fmt1(average(all)) })),
+        plotted.length >= 2 && monthChart(plotted, `Оцінки за ${monthName(key).toLowerCase()}`),
+        current.length > 0 && el('div', { className: 'cells' }, ...current.map((g) => el('div', { className: 'cell' },
+          el('div', { className: 'date', textContent: shortDate(g.date) }),
+          chip(g),
+          el('div', { className: 'kind', textContent: g.kind === 'missing' ? 'пропуск' : g.type ?? '' })))),
+        ...finals.map((g) => el('div', { className: 'final-row' },
+          el('div', { className: 'body' },
+            el('div', { textContent: `${g.type ?? 'Підсумкова'} ${shortDate(g.date)}` }),
+            g.topic && el('div', { className: 'topic', textContent: g.topic })),
+          chip(g))),
+        ...all.filter((g) => g.comment).map((g) => el('div', { className: 'note', textContent: `${shortDate(g.date)}: «${g.comment}»` })));
+    }),
+    el('p', { className: 'muted legend', textContent: 'Середній бал рахується з поточних оцінок, як на сайті щоденника; тематичні й підсумкові показано окремо.' }),
+  ];
+}
+
+function renderGrades(today) {
   const grades = data.grades ?? [];
   if (!grades.length) {
     return [empty(data.syncing ? 'Завантажую оцінки…' : 'Оцінок поки немає. Натисни ↻, щоб завантажити.')];
   }
-  const marks = grades.filter((g) => g.kind !== 'missing'); // сервер отдаёт от новых к старым
-  const missed = grades.length - marks.length;
-  const avg = average(grades);
+  if (subject && grades.some((g) => g.subject === subject)) return renderSubject(subject, today);
+  subject = null;
 
-  const bySubject = new Map();
-  for (const g of grades) {
-    if (!bySubject.has(g.subject)) bySubject.set(g.subject, []);
-    bySubject.get(g.subject).push(g);
-  }
-  const subjects = [...bySubject.keys()].sort((a, b) => a.localeCompare(b, 'uk'));
+  const missed = grades.filter((g) => g.kind === 'missing');
+  const marks = grades.filter((g) => g.kind !== 'missing'); // сервер отдаёт от новых к старым
+  const semester = semesterOf(today);
+  const rows = [...new Set(grades.map((g) => g.subject))]
+    .map((name) => ({ name, expected: average(grades.filter((g) => g.subject === name && semesterOf(g.date) === semester)) }))
+    .sort((a, b) => (b.expected ?? -1) - (a.expected ?? -1) || a.name.localeCompare(b.name, 'uk'));
 
   return [
-    el('div', { className: 'overview' },
-      el('div', {}, el('div', { className: 'big', textContent: avg == null ? '—' : num(avg) }), el('div', { className: 'muted', textContent: 'середній бал' })),
-      el('div', { className: 'muted' },
-        el('div', { textContent: `Оцінок: ${marks.length}` }),
-        el('div', { textContent: `Пропусків: ${missed}` }))),
-    el('p', { className: 'muted legend', textContent: 'Середній бал рахується з поточних оцінок. В обведених рамкою — тематичні й підсумкові.' }),
+    el('div', { className: 'tiles' },
+      tile(String(missed.length), 'Пропусків за рік'),
+      tile(String(missed.filter((g) => g.date.startsWith(today.slice(0, 7))).length), 'Пропусків за місяць')),
 
-    el('h2', { textContent: 'Останні' }),
-    el('ul', {}, ...marks.slice(0, 6).map((g) => el('li', { className: 'grade' },
+    el('h2', { textContent: 'Очікувана оцінка за семестр' }),
+    el('ul', {}, ...rows.map((r) => {
+      const open = el('button', { className: 'meter' },
+        el('span', { className: 'name', textContent: r.name }),
+        el('span', { className: 'fig', textContent: fmt1(r.expected) }),
+        el('span', { className: 'go', textContent: '›' }),
+        el('span', { className: 'track' }, el('i', { style: `width:${r.expected == null ? 0 : (r.expected / 12) * 100}%` })));
+      open.setAttribute('aria-label', r.expected == null ? `${r.name}: оцінок немає` : `${r.name}: ${fmt1(r.expected)} з 12`);
+      open.addEventListener('click', () => { subject = r.name; window.scrollTo(0, 0); render(); });
+      return el('li', {}, open);
+    })),
+
+    el('h2', { textContent: 'Останні оцінки' }),
+    el('ul', {}, ...marks.slice(0, 5).map((g) => el('li', { className: 'grade' },
       chip(g),
       el('div', { className: 'body' },
         el('div', { className: 'subject', textContent: g.subject }),
@@ -302,22 +406,6 @@ function renderGrades() {
           g.type && el('span', { textContent: g.type }),
           g.topic && el('span', { textContent: g.topic })),
         g.comment && el('div', { className: 'note', textContent: `«${g.comment}»` }))))),
-
-    el('h2', { textContent: 'За предметами' }),
-    el('ul', {}, ...subjects.map((subject) => {
-      const list = bySubject.get(subject).slice().reverse(); // от старых к новым, как в журнале
-      const a = average(list);
-      return el('li', { className: 'card' },
-        el('div', { className: 'row' },
-          el('span', { className: 'subject', textContent: subject }),
-          el('span', { className: 'avg', textContent: a == null ? '—' : num(a) })),
-        el('div', { className: 'chips' }, ...list.map(chip)),
-        el('details', {},
-          el('summary', { textContent: `Докладно (${list.length})` }),
-          el('ul', { className: 'rows' }, ...list.slice().reverse().map((g) => el('li', {},
-            el('b', { textContent: g.label }),
-            ` · ${[shortDate(g.date), g.kind === 'missing' ? 'пропуск' : g.type, g.topic, g.comment && `«${g.comment}»`].filter(Boolean).join(' · ')}`)))));
-    })),
   ];
 }
 
@@ -338,7 +426,9 @@ function render() {
     render();
   });
 
-  const body = view === 'schedule' ? renderSchedule(today) : view === 'grades' ? renderGrades() : renderHomework(today);
+  const body = view === 'schedule' ? renderSchedule(today) : view === 'grades' ? renderGrades(today) : renderHomework(today);
+  // Системная кнопка «назад» в Telegram возвращает со страницы предмета к списку.
+  if (view === 'grades' && subject) tg?.BackButton?.show?.(); else tg?.BackButton?.hide?.();
 
   app.replaceChildren(...[
     el('header', {},
@@ -349,6 +439,7 @@ function render() {
     data.error && el('p', { className: 'error', textContent: `Не вдалося оновити: ${data.error}` }),
     switcher('nav', [['homework', 'Домашка'], ['schedule', 'Розклад'], ['grades', 'Оцінки']], view, (id) => {
       view = id;
+      subject = null;
       remember('view', id);
       scrollToToday = id === 'schedule';
       window.scrollTo(0, 0);
@@ -391,6 +482,8 @@ async function watchSync() {
   } catch { /* связь пропала: данные обновятся при следующем открытии */ }
   watching = false;
 }
+
+tg?.BackButton?.onClick?.(() => { subject = null; render(); });
 
 try {
   data = await api('/api/state');

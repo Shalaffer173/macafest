@@ -82,7 +82,8 @@ function makeGrades(lessons) {
     const base = { subject: l.subject, date: l.date, lessonDate: l.date, topic: l.topic, comment: null };
     if (roll < 5) {
       const value = 6 + pick(`v${l.id}`, 7); // 6..12
-      grades.push({ ...base, id: `g-${l.id}`, label: String(value), value, kind: 'current', type: 'Поточна' });
+      const type = ['Урок', 'Урок', 'Практична робота', 'Самостійна робота', 'Контрольна робота'][pick(`k${l.id}`, 5)];
+      grades.push({ ...base, id: `g-${l.id}`, label: String(value), value, kind: 'current', type });
     } else if (roll === 5) {
       const value = 7 + pick(`t${l.id}`, 5);
       grades.push({ ...base, id: `t-${l.id}`, label: String(value), value, kind: 'summary', type: 'Тематична' });
@@ -122,7 +123,7 @@ export async function fetchDiary(_session, from, to) {
   // Со второй синхронизации появляется новая оценка — так проверяются уведомления.
   if (tick > 1) {
     const date = lessonDate('Алгебра', -1);
-    grades.push({ id: 'g-new', subject: 'Алгебра', date, lessonDate: date, label: '11', value: 11, kind: 'current', type: 'Поточна', topic: null, comment: 'Молодець!' });
+    grades.push({ id: 'g-new', subject: 'Алгебра', date, lessonDate: date, label: '11', value: 11, kind: 'current', type: 'Урок', topic: null, comment: 'Молодець!' });
   }
   return { tasks: makeTasks(), lessons, grades };
 }
