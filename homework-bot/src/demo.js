@@ -94,9 +94,61 @@ function makeGrades(lessons) {
   return grades;
 }
 
+// ---------- ответы на задания (хранятся в памяти) ----------
+const answers = new Map();
+let nextFileId = 1000;
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+function answerOf(id) {
+  if (!answers.has(id)) {
+    answers.set(id, {
+      status: 'todo', answerId: null, text: '', submittedAt: null, teacherComment: null, files: [],
+      teacherFiles: id === '103' ? [{ id: 900, name: 'Зразок хронологічної таблиці.docx', size: 48213 }] : [],
+    });
+  }
+  return answers.get(id);
+}
+Object.assign(answerOf('106'), { status: 'submitted', answerId: 1, text: 'Розв’язання у файлі', submittedAt: new Date(Date.now() - 86400000).toISOString(),
+  files: [{ id: 990, name: 'geometry-318.jpg', size: 734003 }] });
+Object.assign(answerOf('109'), { status: 'checked', answerId: 2, text: 'Прочитав, відгук написав у зошиті.', submittedAt: new Date(Date.now() - 3 * 86400000).toISOString(),
+  teacherComment: 'Добре, але відгук варто було здати сюди.' });
+
+export async function getAnswer(_session, id) {
+  await pause(300);
+  return structuredClone(answerOf(String(id)));
+}
+export async function uploadAnswerFile(_session, id, file, name) {
+  await pause(700);
+  const a = answerOf(String(id));
+  if (a.status === 'checked') throw Object.assign(new Error('Вчитель уже перевірив роботу — змінювати відповідь не можна'), { code: 'answer_locked' });
+  a.files.push({ id: nextFileId++, name, size: file.size });
+  return a.files[a.files.length - 1].id;
+}
+export async function removeAnswerFile(_session, id, fileId) {
+  await pause(300);
+  const a = answerOf(String(id));
+  a.files = a.files.filter((f) => f.id !== Number(fileId));
+}
+export async function submitAnswer(_session, id, text) {
+  await pause(600);
+  const a = answerOf(String(id));
+  if (a.status === 'checked') throw Object.assign(new Error('Вчитель уже перевірив роботу — змінювати відповідь не можна'), { code: 'answer_locked' });
+  if (!String(text ?? '').trim() && !a.files.length) throw Object.assign(new Error('Напиши відповідь або додай файл'), { code: 'answer_empty' });
+  Object.assign(a, { status: 'submitted', answerId: a.answerId ?? 3, text: String(text ?? '').trim(), submittedAt: new Date().toISOString() });
+  return structuredClone(a);
+}
+
+export async function fetchYear() {
+  const today = todayIso();
+  const y = Number(today.slice(0, 4)) - (today.slice(5, 7) >= '08' ? 0 : 1);
+  return { start: `${y}-09-01`, end: `${y + 1}-05-31`, semester2: `${y + 1}-01-12` };
+}
+
 function makeTasks() {
   const task = (id, subject, text, dueK, extra = {}) => ({
-    id, subject, text, topic: null, files: 0,
+    id, subject, text, topic: null,
+    // как в настоящем дневнике: сданным считается задание с ответом или файлами ученика
+    files: answerOf(id).files.length,
+    answered: answerOf(id).status !== 'todo' || answerOf(id).files.length > 0,
     due: lessonDate(subject, dueK),
     assigned: lessonDate(subject, dueK > 0 ? -1 : dueK - 1),
     ...extra,
@@ -105,10 +157,11 @@ function makeTasks() {
     task('101', 'Алгебра', '§12, № 245, 247, 251', 1, { topic: 'Квадратні рівняння' }),
     task('102', 'Українська мова', 'Вправа 134 (письмово), вивчити правило на с. 87', 1),
     task('103', 'Історія України', 'Опрацювати §9, скласти хронологічну таблицю', 1, { topic: 'Козацька доба' }),
-    task('104', 'Англійська мова', 'Workbook p. 34 ex. 2–4', 1),
+    task('104', 'Англійська мова', 'Workbook p. 34 ex. 2–4. Тест: https://example.com/test/start/abc123', 1),
     task('105', 'Фізика', 'Задачі 8.3, 8.7; підготуватися до лабораторної', -1, { topic: 'Закони Ньютона' }),
-    task('106', 'Геометрія', '№ 318, 322', -1, { answered: true, files: 1 }),
+    task('106', 'Геометрія', '№ 318, 322', -1),
     task('107', 'Біологія', 'Конспект §14, намалювати будову клітини', 1),
+    task('109', 'Зарубіжна література', 'Прочитати повість і написати короткий відгук: https://example.com/povist', -1),
   ];
   // Со второй синхронизации «учитель» добавляет задание задним числом.
   if (tick > 1) tasks.push(task('108', 'Хімія', 'Розв’язати задачі 1–5 на с. 61', -1));

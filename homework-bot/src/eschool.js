@@ -36,11 +36,12 @@ let trace = null;
 export function setTrace(fn) { trace = fn; }
 
 async function request(jar, url, opts = {}) {
+  const { timeout = 20000, ...init } = opts;
   const res = await fetch(url, {
     redirect: 'manual',
-    signal: AbortSignal.timeout(20000),
-    ...opts,
-    headers: { 'User-Agent': UA, Accept: 'application/json', Cookie: cookieHeader(jar), ...opts.headers },
+    signal: AbortSignal.timeout(timeout),
+    ...init,
+    headers: { 'User-Agent': UA, Accept: 'application/json', Cookie: cookieHeader(jar), ...init.headers },
   });
   absorbCookies(jar, res);
   if (trace) {
@@ -136,20 +137,36 @@ export async function refresh(session) {
   await bindIdentity(session.jar, session.identity);
 }
 
-/** GET к API дневника с одним повтором после продления сессии. */
-async function api(session, path, params) {
+/**
+ * Запрос к API дневника с одним повтором после продления сессии.
+ * opts: { method, json, form, timeout }. Возвращает разобранный JSON или null, если тело пустое.
+ */
+async function api(session, path, params, opts = {}) {
   const url = new URL(`${DIARY}/api/${path}`);
   for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v);
-  let res = await request(session.jar, url);
+  const method = opts.method ?? 'GET';
+  const init = { method, timeout: opts.timeout };
+  if (opts.json !== undefined) {
+    init.headers = { 'Content-Type': 'application/json' };
+    init.body = JSON.stringify(opts.json);
+  } else if (opts.form) {
+    init.body = opts.form; // границу multipart fetch выставит сам
+  }
+  let res = await request(session.jar, url, init);
   if (res.status === 401 || res.status === 403) {
     await refresh(session);
-    res = await request(session.jar, url);
+    res = await request(session.jar, url, init);
     if (res.status === 401 || res.status === 403) {
-      throw new EschoolError('session_expired', 'Сессия истекла, нужно войти заново');
+      // Чтение после удачного продления всё равно не пускают — сессия негодна.
+      // Запись могли запретить по делу (например, работу уже проверили): это не повод разлогинивать.
+      if (method === 'GET') throw new EschoolError('session_expired', 'Сессия истекла, нужно войти заново');
+      throw new EschoolError('forbidden', `Щоденник не дозволив цю дію (${res.status})`);
     }
   }
   if (!res.ok) throw new EschoolError('api_error', `Дневник ответил ${res.status} на ${path}`);
-  return res.json();
+  const text = await res.text();
+  if (!text.trim()) return null;
+  try { return JSON.parse(text); } catch { return null; }
 }
 
 const getProfile = (session) => api(session, 'profile');
@@ -284,6 +301,117 @@ export function appointmentsToGrades(appointments) {
   return [...grades.values()];
 }
 
+/**
+ * Сводка по отметкам об отсутствии в сыром ответе дневника — без имён и текстов.
+ * Нужна, чтобы разобраться, если число пропусков расходится с официальным приложением.
+ */
+export function missingStats(appointments) {
+  const st = { rates: 0, marks: 0, unique: 0, repeated: 0, byTypeId: 0, byMissingField: 0, typeTextOnly: 0, missingValues: {}, onCanceled: 0, byMonth: {} };
+  const seen = new Set();
+  for (const a of appointments ?? []) {
+    for (const r of a?.Embed?.Rates ?? []) {
+      if (!r) continue;
+      st.rates++;
+      const byType = r.MissingTypeId != null;
+      const byField = r.Missing > 0;
+      if (!byType && !byField) {
+        if (clean(r.MissingType)) st.typeTextOnly++;
+        continue;
+      }
+      st.marks++;
+      if (byType) st.byTypeId++;
+      if (byField) { st.byMissingField++; st.missingValues[r.Missing] = (st.missingValues[r.Missing] ?? 0) + 1; }
+      if (seen.has(r.Id)) st.repeated++; else { seen.add(r.Id); st.unique++; }
+      if (a.Canceled === true) st.onCanceled++;
+      const month = (day(r.Date) ?? day(a.Date) ?? '?').slice(0, 7);
+      st.byMonth[month] = (st.byMonth[month] ?? 0) + 1;
+    }
+  }
+  return st;
+}
+
+/**
+ * Границы учебного года из дневника: { start, end, semester2 } (YYYY-MM-DD) или null.
+ * Дневник хранит по записи на семестр; год — от самого раннего начала до самого позднего конца.
+ */
+export function parseAcademicYear(items) {
+  const list = (items ?? []).filter(Boolean);
+  const starts = list.map((i) => day(i.Start)).filter(Boolean).sort();
+  const ends = list.map((i) => day(i.End)).filter(Boolean).sort();
+  if (!starts.length || !ends.length) return null;
+  const second = list.filter((i) => i.Semester === 2).map((i) => day(i.Start)).filter(Boolean).sort()[0] ?? null;
+  return { start: starts[0], end: ends[ends.length - 1], semester2: second };
+}
+
+export async function fetchYear(session) {
+  const data = await api(session, `v1/${session.schoolId}/AcademicYear`);
+  return parseAcademicYear(data?.Items);
+}
+
+// ---------- ответы на домашние задания ----------
+// Порядок действий тот же, что на сайте дневника: файлы загружаются к заданию по одному
+// (UploadFile), затем ответ создаётся (AssignAnswer) или меняется (UpdateAnswer) со списком
+// всех файлов ученика. После проверки учителем ответ менять нельзя.
+
+const homeworkPath = (session, id, tail = '') => `v1/${session.schoolId}/Homework/${encodeURIComponent(id)}${tail}`;
+const fileInfo = (f) => ({ id: f.Id, name: clean(f.Name) ?? `#${f.Id}`, size: typeof f.Size === 'number' ? f.Size : null });
+
+/** Состояние ответа ученика на задание, как его хранит дневник. */
+export async function getAnswer(session, homeworkId) {
+  const hw = await api(session, homeworkPath(session, homeworkId), { embed: 'File' });
+  const list = await api(session, homeworkPath(session, homeworkId, '/Answer'), { schoolboyId: String(session.schoolboyId), embed: 'File' });
+  const answer = (list?.Items ?? []).filter(Boolean)[0] ?? null;
+  const files = (hw?.Embed?.Files ?? []).filter(Boolean);
+  const own = (f) => typeof f.Role === 'string' && f.Role.trim().toLowerCase() === 'schoolboy';
+  let status = 'todo'; // ещё не сдано
+  if (answer) {
+    if (answer.AnswerChecked === true) status = 'checked'; // проверено, менять нельзя
+    else if ((answer.CheckedTime ?? '').trim() !== '') status = 'reopened'; // учитель вернул на доработку
+    else status = 'submitted';
+  }
+  return {
+    status,
+    answerId: answer?.Id ?? null,
+    text: answer?.Answer ?? '',
+    submittedAt: answer?.SubmittedTime ?? null,
+    teacherComment: clean(answer?.TeacherComment),
+    files: files.filter(own).map(fileInfo),
+    teacherFiles: files.filter((f) => !own(f)).map(fileInfo),
+  };
+}
+
+/** Прикрепляет файл ученика к заданию. file — File или Blob с именем. Возвращает id файла в дневнике. */
+export async function uploadAnswerFile(session, homeworkId, file, name) {
+  const form = new FormData();
+  form.append('upload-file', file, name);
+  const res = await api(session, homeworkPath(session, homeworkId, '/UploadFile'), null, { method: 'POST', form, timeout: 180000 });
+  const id = Array.isArray(res) ? res[0]?.Id : null;
+  if (!Number.isInteger(id)) throw new EschoolError('upload_failed', 'Щоденник не прийняв файл');
+  return id;
+}
+
+export async function removeAnswerFile(session, homeworkId, fileId) {
+  await api(session, homeworkPath(session, homeworkId, '/RemoveFile'), null, { method: 'POST', json: { Id: Number(fileId) } });
+}
+
+/** Создаёт или меняет ответ на задание и возвращает то, что после этого реально лежит в дневнике. */
+export async function submitAnswer(session, homeworkId, text) {
+  const current = await getAnswer(session, homeworkId);
+  if (current.status === 'checked') {
+    throw new EschoolError('answer_locked', 'Вчитель уже перевірив роботу — змінювати відповідь не можна');
+  }
+  const answer = String(text ?? '').trim();
+  const Files = current.files.map((f) => ({ Id: f.id }));
+  if (!answer && !Files.length) throw new EschoolError('answer_empty', 'Напиши відповідь або додай файл');
+  if (current.answerId == null) {
+    const created = await api(session, homeworkPath(session, homeworkId, '/AssignAnswer'), null, { method: 'POST', json: { Answer: answer, Files } });
+    if (!created || typeof created.Id !== 'number') throw new EschoolError('submit_failed', 'Щоденник не підтвердив, що відповідь збережено');
+  } else {
+    await api(session, homeworkPath(session, homeworkId, '/UpdateAnswer'), null, { method: 'POST', json: { Id: current.answerId, Answer: answer, Files } });
+  }
+  return getAnswer(session, homeworkId);
+}
+
 /** Всё за период [from, to]: задания, расписание и оценки. Сайт запрашивает по неделе, делаем так же. */
 export async function fetchDiary(session, from, to) {
   const all = [];
@@ -295,5 +423,8 @@ export async function fetchDiary(session, from, to) {
     all.push(...(data.Items ?? []));
     await new Promise((r) => setTimeout(r, 200)); // не частим
   }
-  return { tasks: appointmentsToTasks(all), lessons: appointmentsToLessons(all), grades: appointmentsToGrades(all) };
+  return {
+    tasks: appointmentsToTasks(all), lessons: appointmentsToLessons(all), grades: appointmentsToGrades(all),
+    debug: { appointments: all.length, missing: missingStats(all) },
+  };
 }

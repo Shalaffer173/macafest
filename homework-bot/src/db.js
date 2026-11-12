@@ -87,6 +87,11 @@ export function openDb(path) {
   if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'extras_synced')) {
     db.exec('ALTER TABLE users ADD COLUMN extras_synced INTEGER NOT NULL DEFAULT 0');
   }
+  // v0.3: границы учебного года и второго семестра из дневника
+  if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'year_start')) {
+    db.exec('ALTER TABLE users ADD COLUMN year_start TEXT');
+    db.exec('ALTER TABLE users ADD COLUMN semester2_start TEXT');
+  }
   // v0.1.3: задания, по которым ученик сдал ответ в дневнике, отмечаются сделанными
   if (!db.prepare('PRAGMA table_info(tasks)').all().some((c) => c.name === 'answered')) {
     db.exec('ALTER TABLE tasks ADD COLUMN answered INTEGER NOT NULL DEFAULT 0');

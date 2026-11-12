@@ -153,3 +153,24 @@ h2.title { font-size: 20px; text-transform: none; letter-spacing: 0; color: var(
 .chart .dot { fill: var(--series); stroke: var(--card); stroke-width: 2; transition: r .1s; }
 .chart .hit { fill: transparent; cursor: pointer; outline-offset: -8px; }
 .readout { min-height: 18px; margin-top: 4px; font-size: 13px; color: var(--muted); text-align: right; }
+
+/* ---------- ответ на задание ---------- */
+.act { margin-top: 8px; border: 0; border-radius: 9px; padding: 6px 12px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.due { margin: 2px 4px 0; }
+.tasktext { margin-top: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tasktext a { color: var(--tg-theme-link-color, var(--accent)); }
+.status { margin: 0 4px 8px; font-size: 14px; color: var(--muted); }
+.status.reopened { color: var(--warn); }
+.comment { margin: 0 0 8px; font-size: 14px; overflow-wrap: anywhere; }
+textarea { display: block; width: 100%; min-height: 120px; resize: vertical; font: inherit; padding: 12px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--muted) 40%, transparent); background: var(--card); color: var(--text); }
+textarea[readonly] { opacity: .7; }
+textarea + ul { margin-top: 8px; }
+.file { display: flex; align-items: center; gap: 10px; background: var(--card); border-radius: 12px; padding: 8px 12px; font-size: 14px; }
+.file .name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.file .muted { flex: none; font-size: 12px; }
+.file .x { flex: none; width: 32px; height: 32px; border: 0; border-radius: 9px; background: none; color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; }
+.secondary { display: block; width: 100%; margin-top: 8px; border: 1px dashed color-mix(in srgb, var(--muted) 50%, transparent); border-radius: 12px; padding: 11px; background: none; color: var(--text); font: inherit; cursor: pointer; }
+.secondary:disabled, .x:disabled { opacity: .5; }
+.saved { margin: 8px 4px 0; font-size: 14px; color: var(--ok-text); }
+main > .primary { display: block; width: 100%; margin-top: 12px; }
+main > p.muted, main > p.error { margin-left: 4px; margin-right: 4px; }

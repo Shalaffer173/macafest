@@ -24,31 +24,64 @@ function saveSession(tgId, session) {
   db.prepare('UPDATE users SET session = ? WHERE tg_id = ?').run(encrypt(JSON.stringify(session), config.secretKey), tgId);
 }
 
+// Все обращения к дневнику от имени одного пользователя идут по очереди: синхронизация и сдача
+// ответа пользуются одними токенами, и одновременное продление сессии могло бы их испортить.
+const queues = new Map();
+function inTurn(tgId, fn) {
+  const run = (queues.get(tgId) ?? Promise.resolve()).then(fn, fn);
+  const tail = run.catch(() => {});
+  queues.set(tgId, tail);
+  tail.then(() => { if (queues.get(tgId) === tail) queues.delete(tgId); });
+  return run;
+}
+
+function dropSession(tgId, message) {
+  db.prepare('UPDATE users SET session = NULL, sync_error = ? WHERE tg_id = ?').run(message, tgId);
+}
+
+/** Выполняет fn(session) в очереди пользователя и сохраняет обновившиеся токены. */
+function withSession(tgId, fn) {
+  return inTurn(tgId, async () => {
+    const session = loadSession(db.prepare('SELECT session FROM users WHERE tg_id = ?').get(tgId));
+    if (!session) throw Object.assign(new Error('Потрібно увійти ще раз'), { status: 401 });
+    try {
+      const result = await fn(session);
+      saveSession(tgId, session); // токены могли обновиться
+      return result;
+    } catch (e) {
+      if (e.code === 'session_expired') {
+        console.error(`[session] ${tgId}: сессия дневника потеряна, нужен повторный вход`);
+        dropSession(tgId, e.message);
+      } else {
+        saveSession(tgId, session);
+      }
+      throw e;
+    }
+  });
+}
+
 const running = new Set(); // чтобы один пользователь не синхронизировался дважды одновременно
 async function runSync(tgId, { notify }) {
   if (running.has(tgId)) return null;
   running.add(tgId);
   try {
-    const row = db.prepare('SELECT session FROM users WHERE tg_id = ?').get(tgId);
-    const session = loadSession(row);
-    if (!session) return null;
-    try {
-      const result = await syncUser(db, provider, tgId, session, config);
-      saveSession(tgId, session); // токены могли обновиться
-      console.log(`[sync] ${tgId}: ${result.from}..${result.to}, заданий ${result.fetched}, с ответом ${result.answered}, новых ${result.diff.added.length}; уроков ${result.lessons}, оценок ${result.gradesTotal}, новых оценок ${result.grades.added.length}`);
-      const text = notify && describeDiff(result);
-      if (text && bot) await bot.send(tgId, text, true);
-      return result;
-    } catch (e) {
-      if (e.code === 'session_expired') {
-        console.error(`[sync] ${tgId}: сессия дневника потеряна, нужен повторный вход`);
-        db.prepare('UPDATE users SET session = NULL, sync_error = ? WHERE tg_id = ?').run(e.message, tgId);
-        if (notify && bot) await bot.send(tgId, '🔑 Сесія «Єдиної Школи» закінчилась. Відкрий список і увійди ще раз.', true);
-      } else {
-        db.prepare('UPDATE users SET sync_error = ? WHERE tg_id = ?').run(e.message, tgId);
-      }
-      throw e;
+    const result = await withSession(tgId, (session) => syncUser(db, provider, tgId, session, config));
+    console.log(`[sync] ${tgId}: ${result.from}..${result.to}, заданий ${result.fetched}, с ответом ${result.answered}, новых ${result.diff.added.length}; уроков ${result.lessons}, оценок ${result.gradesTotal}, новых оценок ${result.grades.added.length}`);
+    if (result.full && result.debug) {
+      // Сводка без личных данных: помогает сверять число пропусков с официальным приложением.
+      console.log(`[sync] ${tgId}: весь год с ${result.from}, уроков в ответе ${result.debug.appointments}, пропуски ${JSON.stringify(result.debug.missing)}`);
     }
+    const text = notify && describeDiff(result);
+    if (text && bot) await bot.send(tgId, text, true);
+    return result;
+  } catch (e) {
+    if (e.status === 401) return null; // пользователь не вошёл — синхронизировать нечего
+    if (e.code === 'session_expired') {
+      if (notify && bot) await bot.send(tgId, '🔑 Сесія «Єдиної Школи» закінчилась. Відкрий список і увійди ще раз.', true);
+    } else {
+      db.prepare('UPDATE users SET sync_error = ? WHERE tg_id = ?').run(e.message, tgId);
+    }
+    throw e;
   } finally {
     running.delete(tgId);
   }
@@ -75,6 +108,35 @@ async function readJson(req) {
   try { return raw ? JSON.parse(raw) : {}; } catch { throw Object.assign(new Error('Некорректный JSON'), { status: 400 }); }
 }
 
+const MAX_FILE = 20 * 1024 * 1024;
+async function readFile20(req) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_FILE) throw Object.assign(new Error('Файл завеликий: можна до 20 МБ'), { status: 413 });
+    chunks.push(chunk);
+  }
+  if (!size) throw Object.assign(new Error('Порожній файл'), { status: 400 });
+  return Buffer.concat(chunks);
+}
+
+/** Имя файла из заголовка: без путей и управляющих символов. */
+function fileName(req) {
+  let name = '';
+  try { name = decodeURIComponent(String(req.headers['x-file-name'] ?? '')); } catch { /* оставим пустым */ }
+  name = name.replace(/[\\/\u0000-\u001f]/g, '_').trim().slice(0, 200);
+  return name || 'file';
+}
+
+/** Ошибка дневника -> ответ приложению. */
+function answerFailed(res, tgId, e) {
+  console.error(`[answer] ${tgId}: ${e.code ?? e.status ?? 'error'} ${e.message}`);
+  const status = e.status ?? { session_expired: 401, answer_locked: 409, answer_empty: 400, forbidden: 403 }[e.code] ?? 502;
+  const message = e.code === 'session_expired' ? 'Сесія закінчилась. Увійди ще раз' : e.message;
+  return send(res, status, { error: message });
+}
+
 function authUser(req) {
   if (config.demo) return { id: 1 };
   return verifyInitData(req.headers['x-telegram-init-data'], config.botToken);
@@ -88,7 +150,7 @@ function scheduleFrom() {
 }
 
 function state(tgId) {
-  const u = db.prepare('SELECT session, student_name, school_name, last_sync, sync_error FROM users WHERE tg_id = ?').get(tgId);
+  const u = db.prepare('SELECT session, student_name, school_name, last_sync, sync_error, semester2_start FROM users WHERE tg_id = ?').get(tgId);
   if (!u?.session) return { loggedIn: false, error: u?.sync_error ?? null };
   const tasks = db.prepare(`SELECT task_id AS id, subject, text, topic, due, assigned, files, done, backdated, changed, removed, archived, answered
     FROM tasks WHERE tg_id = ? ORDER BY due, subject`).all(tgId)
@@ -100,6 +162,8 @@ function state(tgId) {
   return {
     loggedIn: true, student: u.student_name, school: u.school_name, lastSync: u.last_sync, error: u.sync_error,
     syncing: running.has(tgId), tasks, lessons, grades,
+    semester2Start: u.semester2_start ?? null, // с какой даты идёт второй семестр, если дневник это сообщил
+    canAnswer: typeof provider.submitAnswer === 'function',
   };
 }
 
@@ -158,6 +222,45 @@ async function handleApi(req, res, path) {
     const r = db.prepare('UPDATE tasks SET done = ?, done_at = ?, changed = 0, archived = 0 WHERE tg_id = ? AND task_id = ?')
       .run(done ? 1 : 0, done ? new Date().toISOString() : null, tgId, decodeURIComponent(m[1]));
     return r.changes ? send(res, 200, { ok: true }) : send(res, 404, { error: 'Завдання не знайдено' });
+  }
+
+  // ----- ответ на задание: читается и сохраняется прямо в дневнике -----
+  const am = /^\/api\/tasks\/(\d+)\/(answer|files|files\/(\d+)\/remove)$/.exec(path);
+  if (am) {
+    const [, taskId, action, fileId] = am;
+    if (typeof provider.submitAnswer !== 'function') return send(res, 404, { error: 'Not found' });
+    // Только свои задания: id берётся из списка пользователя, а не из запроса на слово.
+    if (!db.prepare('SELECT 1 FROM tasks WHERE tg_id = ? AND task_id = ?').get(tgId, taskId)) {
+      return send(res, 404, { error: 'Завдання не знайдено' });
+    }
+    try {
+      if (req.method === 'GET' && action === 'answer') {
+        return send(res, 200, await withSession(tgId, (s) => provider.getAnswer(s, taskId)));
+      }
+      if (req.method === 'POST' && action === 'answer') {
+        const { text } = await readJson(req);
+        if (text != null && typeof text !== 'string') return send(res, 400, { error: 'Некоректна відповідь' });
+        const answer = await withSession(tgId, (s) => provider.submitAnswer(s, taskId, text ?? ''));
+        db.prepare(`UPDATE tasks SET answered = 1, done = 1, done_at = ?, archived = 0, changed = 0, files = ?
+          WHERE tg_id = ? AND task_id = ?`).run(new Date().toISOString(), answer.files.length, tgId, taskId);
+        console.log(`[answer] ${tgId}: ответ на задание ${taskId} сохранён в дневнике (файлов: ${answer.files.length})`);
+        return send(res, 200, answer);
+      }
+      if (req.method === 'POST' && action === 'files') {
+        const name = fileName(req);
+        const type = String(req.headers['content-type'] ?? 'application/octet-stream');
+        const file = new File([await readFile20(req)], name, { type });
+        await withSession(tgId, (s) => provider.uploadAnswerFile(s, taskId, file, name));
+        return send(res, 200, await withSession(tgId, (s) => provider.getAnswer(s, taskId)));
+      }
+      if (req.method === 'POST' && fileId) {
+        await withSession(tgId, (s) => provider.removeAnswerFile(s, taskId, fileId));
+        return send(res, 200, await withSession(tgId, (s) => provider.getAnswer(s, taskId)));
+      }
+    } catch (e) {
+      return answerFailed(res, tgId, e);
+    }
+    return send(res, 405, { error: 'Method not allowed' });
   }
 
   if (req.method === 'POST' && path === '/api/logout') {

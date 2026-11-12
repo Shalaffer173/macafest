@@ -4,7 +4,10 @@ import { createHmac } from 'node:crypto';
 import { diffTasks, syncUser, describeDiff, schoolYearStart, weekEnd } from '../src/sync.js';
 import { openDb } from '../src/db.js';
 import { encrypt, decrypt, verifyInitData } from '../src/crypto.js';
-import { appointmentsToTasks, appointmentsToLessons, appointmentsToGrades, mergeDuplicates, findLoginActionId, absorbCookies } from '../src/eschool.js';
+import {
+  appointmentsToTasks, appointmentsToLessons, appointmentsToGrades, mergeDuplicates, findLoginActionId, absorbCookies,
+  parseAcademicYear, missingStats, getAnswer, submitAnswer, uploadAnswerFile, removeAnswerFile,
+} from '../src/eschool.js';
 
 const win = { from: '2026-10-01', to: '2026-11-30' };
 const task = (id, o = {}) => ({ id, subject: 'Алгебра', text: '№ 1', topic: null, due: '2026-11-12', assigned: '2026-11-10', files: 0, ...o });
@@ -303,4 +306,132 @@ test('расписание и оценки: первая загрузка мол
   // удаление пользователя стирает расписание и оценки
   db.prepare('DELETE FROM users WHERE tg_id = 1').run();
   assert.deepEqual([count('lessons'), count('grades')], [0, 0]);
+});
+
+test('границы учебного года из ответа дневника', () => {
+  assert.deepEqual(parseAcademicYear([
+    { Id: 1, Start: '2026-08-31T00:00:00', End: '2026-12-25T00:00:00', Semester: 1 },
+    { Id: 2, Start: '2027-01-11T00:00:00', End: '2027-05-31T00:00:00', Semester: 2 },
+    null,
+  ]), { start: '2026-08-31', end: '2027-05-31', semester2: '2027-01-11' });
+  assert.equal(parseAcademicYear([]), null);
+  assert.equal(parseAcademicYear([{ Id: 1, Start: '', End: null }]), null);
+});
+
+test('сводка по пропускам считает записи, повторы и значения поля Missing', () => {
+  const st = missingStats([
+    { Date: '2026-09-02', Embed: { Rates: [{ Id: 1, MissingTypeId: 3, Missing: 1 }, { Id: 2, Rate: 10 }] } },
+    { Date: '2026-09-02', Embed: { Rates: [{ Id: 1, MissingTypeId: 3, Missing: 1 }] } }, // та же запись на втором уроке
+    { Date: '2026-10-05', Canceled: true, Embed: { Rates: [{ Id: 3, Missing: 2 }, { Id: 4, MissingType: 'Н' }] } },
+    null,
+  ]);
+  assert.deepEqual(st, { rates: 5, marks: 3, unique: 2, repeated: 1, byTypeId: 2, byMissingField: 3, typeTextOnly: 1,
+    missingValues: { 1: 2, 2: 1 }, onCanceled: 1, byMonth: { '2026-09': 2, '2026-10': 1 } });
+});
+
+test('синхронизация берёт начало года из дневника, а неправдоподобную дату отбрасывает', async () => {
+  const iso = (n) => { const d = new Date(); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const guess = schoolYearStart(iso(0));
+  const early = (() => { const d = new Date(`${guess}T00:00:00Z`); d.setUTCDate(d.getUTCDate() - 1); return d.toISOString().slice(0, 10); })();
+  const run = async (year) => {
+    const db = openDb(':memory:');
+    db.prepare("INSERT INTO users (tg_id, created_at) VALUES (1, 'x')").run();
+    const calls = [];
+    const provider = {
+      fetchYear: async () => year,
+      fetchDiary: async (_s, from) => { calls.push(from); return { tasks: [], lessons: [], grades: [] }; },
+    };
+    await syncUser(db, provider, 1, {}, { daysBack: 10, daysForward: 14 });
+    return { from: calls[0], user: db.prepare('SELECT year_start, semester2_start FROM users').get() };
+  };
+  // в начале сентября «день раньше 1 сентября» может оказаться ближе 10 дней — тогда окно и так шире года
+  const expectFrom = (start) => (start < iso(-10) ? start : iso(-10));
+  const a = await run({ start: early, end: '2999-01-01', semester2: '2999-01-11' });
+  assert.equal(a.from, expectFrom(early));
+  assert.deepEqual({ ...a.user }, { year_start: early, semester2_start: '2999-01-11' });
+  const b = await run({ start: '2001-09-01', end: '2002-05-31', semester2: null }); // чужой год
+  assert.equal(b.from, expectFrom(guess));
+  assert.equal(b.user.year_start, guess);
+  const c = await run(null); // дневник ничего не сообщил
+  assert.equal(c.user.year_start, guess);
+});
+
+test('ответ на задание: запросы в том же формате, что у сайта дневника', async () => {
+  const session = { jar: { application_token: 't' }, identity: { user_id: 1, school_id: 4047, role: 'schoolboy' }, schoolId: 4047, schoolboyId: 1315 };
+  const calls = [];
+  let answers = [];
+  let files = [{ Id: 5, Name: 'task.pdf', Role: 'teacher', Size: 100 }];
+  let refuseWrites = false;
+  const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const u = new URL(url);
+    const call = { method: init.method ?? 'GET', path: u.pathname, query: Object.fromEntries(u.searchParams) };
+    if (typeof init.body === 'string') call.json = JSON.parse(init.body);
+    if (init.body instanceof FormData) call.form = [...init.body.entries()].map(([k, v]) => [k, v.name, v.size]);
+    calls.push(call);
+    const tail = u.pathname.replace('/api/v1/4047/Homework/77', '');
+    if (u.pathname === '/api/auth/refresh' || u.pathname === '/api/v1/seplogin') return json({});
+    if (refuseWrites && call.method === 'POST') return json({ code: 'forbidden' }, 403);
+    if (tail === '') return json({ Id: 77, Embed: { Files: files } });
+    if (tail === '/Answer') return json({ Items: answers });
+    if (tail === '/UploadFile') { files = [...files, { Id: 9, Name: 'my.jpg', Role: 'Schoolboy', Size: 3 }]; return json([{ Id: 9 }]); }
+    if (tail === '/AssignAnswer') { answers = [{ Id: 300, Answer: call.json.Answer, SubmittedTime: '2026-11-12T10:00:00' }]; return json(answers[0]); }
+    if (tail === '/UpdateAnswer') { answers = [{ ...answers[0], Answer: call.json.Answer }]; return new Response('', { status: 200 }); }
+    if (tail === '/RemoveFile') { files = files.filter((f) => f.Id !== call.json.Id); return new Response('', { status: 200 }); }
+    return json({}, 404);
+  };
+  const last = (suffix) => calls.filter((c) => c.path.endsWith(suffix)).at(-1);
+  try {
+    // чтение: задание с файлами и ответ ученика
+    const empty = await getAnswer(session, '77');
+    assert.deepEqual(empty, { status: 'todo', answerId: null, text: '', submittedAt: null, teacherComment: null,
+      files: [], teacherFiles: [{ id: 5, name: 'task.pdf', size: 100 }] });
+    assert.deepEqual(calls.map((c) => [c.method, c.path, c.query]), [
+      ['GET', '/api/v1/4047/Homework/77', { embed: 'File' }],
+      ['GET', '/api/v1/4047/Homework/77/Answer', { schoolboyId: '1315', embed: 'File' }],
+    ]);
+
+    // пустой ответ не отправляется
+    await assert.rejects(submitAnswer(session, '77', '   '), { code: 'answer_empty' });
+    assert.equal(last('/AssignAnswer'), undefined);
+
+    // файл: multipart с полем upload-file
+    assert.equal(await uploadAnswerFile(session, '77', new File(['abc'], 'my.jpg'), 'my.jpg'), 9);
+    assert.deepEqual(last('/UploadFile').form, [['upload-file', 'my.jpg', 3]]);
+
+    // первый ответ создаётся через AssignAnswer со списком файлов ученика
+    const first = await submitAnswer(session, '77', '  Готово ');
+    assert.deepEqual(last('/AssignAnswer').json, { Answer: 'Готово', Files: [{ Id: 9 }] });
+    assert.equal(first.status, 'submitted');
+    assert.equal(first.text, 'Готово');
+    assert.deepEqual(first.files, [{ id: 9, name: 'my.jpg', size: 3 }]);
+
+    // повторный — через UpdateAnswer с id ответа
+    const second = await submitAnswer(session, '77', 'Нова версія');
+    assert.deepEqual(last('/UpdateAnswer').json, { Id: 300, Answer: 'Нова версія', Files: [{ Id: 9 }] });
+    assert.equal(second.text, 'Нова версія');
+
+    await removeAnswerFile(session, '77', '9');
+    assert.deepEqual(last('/RemoveFile').json, { Id: 9 });
+
+    // учитель вернул на доработку
+    answers = [{ Id: 300, Answer: 'x', AnswerChecked: false, CheckedTime: '2026-11-10T10:00:00', TeacherComment: ' Допиши ' }];
+    const reopened = await getAnswer(session, '77');
+    assert.equal(reopened.status, 'reopened');
+    assert.equal(reopened.teacherComment, 'Допиши');
+
+    // проверенный ответ менять нельзя: до записи дело не доходит
+    answers = [{ Id: 300, Answer: 'x', AnswerChecked: true }];
+    const before = calls.length;
+    await assert.rejects(submitAnswer(session, '77', 'ще раз'), { code: 'answer_locked' });
+    assert.equal(calls.slice(before).some((c) => c.method === 'POST'), false);
+
+    // отказ дневника на запись — это не потеря сессии: пользователя не разлогинивает
+    answers = [];
+    refuseWrites = true;
+    await assert.rejects(submitAnswer(session, '77', 'текст'), { code: 'forbidden' });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

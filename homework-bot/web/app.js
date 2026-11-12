@@ -117,6 +117,12 @@ function taskNode(t, today) {
         !t.done && !t.removed && !t.archived && t.due < today && el('span', { className: 'tag danger', textContent: 'прострочено' }),
         t.files > 0 && el('span', { textContent: `📎 ${t.files}` }),
         t.topic && el('span', { textContent: t.topic }))));
+  if (data.canAnswer && !t.removed) {
+    // Отдельная кнопка: нажатие на саму карточку по-прежнему ставит галочку.
+    const act = el('button', { className: 'act', textContent: t.answered ? 'Моя відповідь ›' : 'Здати ›' });
+    act.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openAnswer(t); });
+    li.querySelector('.body').append(act);
+  }
   const toggle = async () => {
     if (t.removed) return;
     t.done = !t.done;
@@ -132,6 +138,7 @@ function taskNode(t, today) {
 }
 
 function renderHomework(today) {
+  if (answering) return renderAnswer();
   // Прогресс считаем по текущей неделе и дальше, плюс всё несделанное из прошлого.
   const monday = mondayOf(today);
   const live = data.tasks.filter((t) => !t.removed && !t.archived && (t.due >= monday || !t.done));
@@ -164,6 +171,182 @@ function renderHomework(today) {
       : [empty(filter === 'todo' ? '🎉 Усе зроблено' : 'Тут поки порожньо')]),
     data.tasks.length > 0 && el('p', { className: 'muted center', textContent:
       `Усього завдань: ${data.tasks.length}, найстаріше від ${shortDate(data.tasks[0].due)}. В архіві: ${data.tasks.filter((t) => t.archived).length}` }),
+  ];
+}
+
+// ---------- ответ на задание ----------
+// Ответ читается и сохраняется прямо в дневнике; у бота остаётся только отметка «сдано».
+
+let answering = null; // { task, data, text, pending, busy, error, saved }
+const MAX_FILE = 20 * 1024 * 1024;
+const fileSize = (bytes) => (bytes == null ? '' : bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} КБ` : `${(bytes / 1024 / 1024).toFixed(1)} МБ`);
+function when(iso) {
+  const d = new Date(iso ?? '');
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+/** Текст с нажимаемыми ссылками. */
+function linkified(text) {
+  const frag = document.createDocumentFragment();
+  let last = 0;
+  for (const m of text.matchAll(/https?:\/\/[^\s<>"']+/g)) {
+    const url = m[0].replace(/[.,;:!?)\]]+$/, ''); // знак в конце предложения — не часть адреса
+    frag.append(text.slice(last, m.index));
+    const a = el('a', { href: url, textContent: url, target: '_blank', rel: 'noopener noreferrer' });
+    a.addEventListener('click', (e) => { if (tg?.openLink) { e.preventDefault(); tg.openLink(url); } });
+    frag.append(a);
+    last = m.index + url.length;
+  }
+  frag.append(text.slice(last));
+  return frag;
+}
+
+function openAnswer(task) {
+  answering = { task, data: null, text: '', pending: [], busy: 'Завантажую відповідь зі щоденника…', error: null, saved: false };
+  window.scrollTo(0, 0);
+  render();
+  loadAnswer();
+}
+
+async function loadAnswer() {
+  const a = answering;
+  a.busy = 'Завантажую відповідь зі щоденника…';
+  a.error = null;
+  try {
+    a.data = await api(`/api/tasks/${a.task.id}/answer`);
+    a.text = a.data.text;
+  } catch (e) {
+    a.error = e.message;
+  }
+  a.busy = null;
+  if (answering === a) render();
+}
+
+async function uploadFile(taskId, file) {
+  const res = await fetch(`/api/tasks/${taskId}/files`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': file.type || 'application/octet-stream',
+      'X-File-Name': encodeURIComponent(file.name),
+      'X-Telegram-Init-Data': tg?.initData ?? '',
+    },
+    body: file,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || `Помилка ${res.status}`);
+  return json;
+}
+
+/** Загружает выбранные файлы по одному, затем сохраняет ответ. Что успело загрузиться, остаётся в дневнике. */
+async function sendAnswer() {
+  const a = answering;
+  a.error = null;
+  a.saved = false;
+  try {
+    while (a.pending.length) {
+      a.busy = `Завантажую файл «${a.pending[0].name}»…`;
+      if (answering === a) render();
+      a.data = await uploadFile(a.task.id, a.pending[0]);
+      a.pending.shift();
+    }
+    a.busy = 'Надсилаю відповідь у щоденник…';
+    if (answering === a) render();
+    a.data = await api(`/api/tasks/${a.task.id}/answer`, { text: a.text });
+    a.text = a.data.text;
+    a.saved = true;
+    Object.assign(a.task, { done: true, answered: true, archived: false, changed: false, files: a.data.files.length });
+    tg?.HapticFeedback?.notificationOccurred?.('success');
+  } catch (e) {
+    a.error = e.message;
+    tg?.HapticFeedback?.notificationOccurred?.('error');
+  }
+  a.busy = null;
+  if (answering === a) render();
+}
+
+async function removeFile(file) {
+  const a = answering;
+  if (!confirm(`Видалити файл «${file.name}» з відповіді?`)) return;
+  a.busy = 'Видаляю файл…';
+  a.error = null;
+  render();
+  try { a.data = await api(`/api/tasks/${a.task.id}/files/${file.id}/remove`, {}); } catch (e) { a.error = e.message; }
+  a.busy = null;
+  if (answering === a) render();
+}
+
+function renderAnswer() {
+  const a = answering;
+  const t = a.task;
+  const d = a.data;
+  const back = el('button', { className: 'back', textContent: '‹ Домашка' });
+  back.addEventListener('click', () => { answering = null; render(); });
+
+  const head = [
+    back,
+    el('h2', { className: 'title', textContent: t.subject }),
+    el('p', { className: 'muted due', textContent: [`На ${shortDate(t.due)}`, t.topic].filter(Boolean).join(' · ') }),
+    el('div', { className: 'card tasktext' }, linkified(t.text)),
+  ];
+  if (!d) {
+    const retry = el('button', { className: 'primary', textContent: 'Спробувати ще раз' });
+    retry.addEventListener('click', () => { render(); loadAnswer(); });
+    return [...head, a.busy && el('p', { className: 'muted', textContent: a.busy }), a.error && el('p', { className: 'error', textContent: a.error }), a.error && retry];
+  }
+
+  const locked = d.status === 'checked';
+  const statusText = {
+    todo: 'Ще не здано',
+    submitted: `Здано${when(d.submittedAt) ? ` ${when(d.submittedAt)}` : ''}. Можна змінити, поки вчитель не перевірив.`,
+    reopened: 'Вчитель повернув роботу на доопрацювання. Виправ відповідь і надішли ще раз.',
+    checked: 'Вчитель уже перевірив роботу — змінити відповідь не можна.',
+  }[d.status];
+
+  const send = el('button', { className: 'primary', textContent: d.answerId == null ? 'Надіслати в щоденник' : 'Зберегти зміни' });
+  const canSend = () => !a.busy && !locked && (a.text.trim() !== '' || d.files.length > 0 || a.pending.length > 0);
+  send.disabled = !canSend();
+  send.addEventListener('click', sendAnswer);
+
+  const area = el('textarea', { value: a.text, placeholder: 'Напиши відповідь…', readOnly: locked, rows: 5 });
+  area.setAttribute('aria-label', 'Моя відповідь');
+  area.addEventListener('input', () => { a.text = area.value; a.saved = false; send.disabled = !canSend(); });
+
+  const picker = el('input', { type: 'file', multiple: true, hidden: true });
+  picker.addEventListener('change', () => {
+    const big = [...picker.files].filter((f) => f.size > MAX_FILE);
+    a.pending.push(...[...picker.files].filter((f) => f.size <= MAX_FILE));
+    a.error = big.length ? `Файл «${big[0].name}» завеликий: можна до 20 МБ` : null;
+    render();
+  });
+  const add = el('button', { className: 'secondary', textContent: '📎 Додати файл', disabled: !!a.busy });
+  add.addEventListener('click', () => picker.click());
+
+  const fileRow = (name, note, onRemove) => {
+    const x = onRemove && el('button', { className: 'x', textContent: '×', disabled: !!a.busy });
+    if (x) { x.setAttribute('aria-label', `Видалити ${name}`); x.addEventListener('click', onRemove); }
+    return el('li', { className: 'file' }, el('span', { className: 'name', textContent: name }), el('span', { className: 'muted', textContent: note }), x);
+  };
+
+  return [
+    ...head,
+    d.teacherFiles.length > 0 && el('h2', { textContent: 'Файли вчителя' }),
+    d.teacherFiles.length > 0 && el('ul', {}, ...d.teacherFiles.map((f) => fileRow(f.name, fileSize(f.size)))),
+    d.teacherFiles.length > 0 && el('p', { className: 'muted legend', textContent: 'Відкрити файли вчителя поки можна тільки в самому щоденнику.' }),
+
+    el('h2', { textContent: 'Моя відповідь' }),
+    el('p', { className: `status ${d.status}`, textContent: statusText }),
+    d.teacherComment && el('p', { className: 'card comment' }, el('b', { textContent: 'Коментар учителя: ' }), d.teacherComment),
+    area,
+    (d.files.length > 0 || a.pending.length > 0) && el('ul', {},
+      ...d.files.map((f) => fileRow(f.name, fileSize(f.size), locked ? null : () => removeFile(f))),
+      ...a.pending.map((f, i) => fileRow(f.name, `${fileSize(f.size)} · ще не надіслано`, () => { a.pending.splice(i, 1); render(); }))),
+    !locked && picker,
+    !locked && add,
+    a.busy && el('p', { className: 'muted', textContent: a.busy }),
+    a.error && el('p', { className: 'error', textContent: a.error }),
+    a.saved && el('p', { className: 'saved', textContent: '✓ Відповідь збережено в щоденнику' }),
+    !locked && send,
+    !locked && el('p', { className: 'muted legend', textContent: 'Відповідь і файли зберігаються в «Єдиній Школі», їх побачить учитель.' }),
   ];
 }
 
@@ -257,7 +440,8 @@ let subject = null; // предмет, открытый на вкладке «О
 const MONTHS = ['Січень', 'Лютий', 'Березень', 'Квітень', 'Травень', 'Червень', 'Липень', 'Серпень', 'Вересень', 'Жовтень', 'Листопад', 'Грудень'];
 const monthName = (key) => MONTHS[Number(key.slice(5, 7)) - 1];
 const fmt1 = (v) => (v == null ? '—' : v.toFixed(1)); // 10.8, как в приложении
-const semesterOf = (iso) => (iso.slice(5, 7) >= '09' ? 1 : 2); // 1-й: сентябрь–декабрь, 2-й: январь–август
+// Второй семестр — с даты, которую сообщил дневник; пока её нет, считаем с января.
+const semesterOf = (iso) => (data?.semester2Start ? (iso >= data.semester2Start ? 2 : 1) : iso.slice(5, 7) >= '09' ? 1 : 2);
 
 /** Средний балл как на сайте дневника: по текущим оценкам, а если их нет — по тематическим и итоговым. */
 function average(grades) {
@@ -422,13 +606,14 @@ function render() {
   const logout = el('button', { className: 'link', textContent: 'Вийти і стерти мої дані' });
   logout.addEventListener('click', async () => {
     if (!confirm('Стерти токен, завдання, розклад і оцінки?')) return;
+    answering = null;
     data = await api('/api/logout', {});
     render();
   });
 
   const body = view === 'schedule' ? renderSchedule(today) : view === 'grades' ? renderGrades(today) : renderHomework(today);
-  // Системная кнопка «назад» в Telegram возвращает со страницы предмета к списку.
-  if (view === 'grades' && subject) tg?.BackButton?.show?.(); else tg?.BackButton?.hide?.();
+  // Системная кнопка «назад» в Telegram возвращает со страницы предмета или ответа к списку.
+  if ((view === 'grades' && subject) || (view === 'homework' && answering)) tg?.BackButton?.show?.(); else tg?.BackButton?.hide?.();
 
   app.replaceChildren(...[
     el('header', {},
@@ -440,6 +625,7 @@ function render() {
     switcher('nav', [['homework', 'Домашка'], ['schedule', 'Розклад'], ['grades', 'Оцінки']], view, (id) => {
       view = id;
       subject = null;
+      answering = null;
       remember('view', id);
       scrollToToday = id === 'schedule';
       window.scrollTo(0, 0);
@@ -478,12 +664,13 @@ async function watchSync() {
       if (!(await api('/api/status')).syncing) break;
     }
     data = await api('/api/state');
-    render();
+    // Не перерисовываем экран, пока человек печатает ответ: сбилось бы место ввода.
+    if (document.activeElement?.tagName !== 'TEXTAREA') render();
   } catch { /* связь пропала: данные обновятся при следующем открытии */ }
   watching = false;
 }
 
-tg?.BackButton?.onClick?.(() => { subject = null; render(); });
+tg?.BackButton?.onClick?.(() => { if (answering) answering = null; else subject = null; render(); });
 
 try {
   data = await api('/api/state');

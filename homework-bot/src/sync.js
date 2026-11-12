@@ -77,7 +77,7 @@ export function schoolYearStart(todayIso) {
 
 /** Одна синхронизация пользователя. Возвращает { diff, first } для уведомлений. */
 export async function syncUser(db, provider, tgId, session, cfg) {
-  const user = db.prepare('SELECT last_sync, covered_from, last_full_sync, extras_synced FROM users WHERE tg_id = ?').get(tgId);
+  const user = db.prepare('SELECT last_sync, covered_from, last_full_sync, extras_synced, year_start, semester2_start FROM users WHERE tg_id = ?').get(tgId);
   const lastSyncDay = user?.last_sync ? user.last_sync.slice(0, 10) : null;
   // Расписание и оценки умеет отдавать не каждый источник (в тестах — только задания).
   const hasExtras = typeof provider.fetchDiary === 'function';
@@ -87,7 +87,20 @@ export async function syncUser(db, provider, tgId, session, cfg) {
   const fullDue = extrasFirst || !user?.last_full_sync
     || Date.now() - Date.parse(user.last_full_sync) > (cfg.fullSyncHours ?? 24) * 3600_000;
   const recent = shift(today(), -cfg.daysBack);
-  const yearStart = schoolYearStart(today());
+  // Начало года и второго семестра берём из дневника, а пока их нет — считаем от 1 сентября.
+  // Дата из дневника принимается, только если она похожа на начало текущего учебного года.
+  const guess = schoolYearStart(today());
+  const plausible = (d) => typeof d === 'string' && d >= shift(guess, -45) && d <= today();
+  let yearStart = plausible(user?.year_start) ? user.year_start : guess;
+  let semester2 = plausible(user?.year_start) ? user.semester2_start ?? null : null;
+  if (fullDue && typeof provider.fetchYear === 'function') {
+    try {
+      const year = await provider.fetchYear(session);
+      if (plausible(year?.start)) { yearStart = year.start; semester2 = year.semester2 ?? null; }
+    } catch (e) {
+      if (e.code === 'session_expired') throw e; // остальное не страшно: остаёмся на прежних границах
+    }
+  }
   const from = fullDue && yearStart < recent ? yearStart : recent;
   const to = weekEnd(shift(today(), cfg.daysForward));
   // Всё, что старше этой даты, бот раньше не загружал: такие задания не «новые», а архив.
@@ -132,10 +145,10 @@ export async function syncUser(db, provider, tgId, session, cfg) {
     if (diary.lessons) replaceLessons(db, tgId, diary.lessons, from, to);
     if (diary.grades) grades = replaceGrades(db, tgId, diary.grades, from, to);
     const covered = user?.covered_from && user.covered_from < from ? user.covered_from : from;
-    db.prepare(`UPDATE users SET last_sync = ?, sync_error = NULL, covered_from = ?, last_full_sync = ?, extras_synced = ?
-      WHERE tg_id = ?`)
+    db.prepare(`UPDATE users SET last_sync = ?, sync_error = NULL, covered_from = ?, last_full_sync = ?, extras_synced = ?,
+      year_start = ?, semester2_start = ? WHERE tg_id = ?`)
       .run(now, covered, from === yearStart || yearStart >= recent ? now : user?.last_full_sync ?? null,
-        hasExtras || user?.extras_synced ? 1 : 0, tgId);
+        hasExtras || user?.extras_synced ? 1 : 0, yearStart, semester2, tgId);
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
@@ -149,6 +162,8 @@ export async function syncUser(db, provider, tgId, session, cfg) {
     answered: fetched.filter((t) => t.answered).length,
     lessons: diary.lessons?.length ?? 0,
     gradesTotal: diary.grades?.length ?? 0,
+    full: from === yearStart, // перечитан весь учебный год
+    debug: diary.debug ?? null,
   };
 }
 
