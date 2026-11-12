@@ -27,21 +27,42 @@ function startBot(url) {
   if (bot) { bot.once('exit', launch); bot.kill(); } else launch();
 }
 
+// Пауза перед переподключением растёт от 5 секунд до 5 минут: если стучаться каждые
+// несколько секунд, сервис тоннелей начинает отказывать совсем.
+let delay = 5;
+let tunnel = null;
+
 function startTunnel() {
   console.log('[tunnel] подключаюсь…');
-  const t = spawn(tunnelCmd, { shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const startedAt = Date.now();
+  let lastLine = '';
+  tunnel = spawn(tunnelCmd, { shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const onData = (chunk) => {
-    const m = /https:\/\/[a-z0-9-]+\.lhr\.life/.exec(String(chunk));
+    const text = String(chunk);
+    const m = /https:\/\/[a-z0-9-]+\.lhr\.life/.exec(text);
     if (m) startBot(m[0]);
+    // Последняя строка вывода ssh — обычно это и есть причина обрыва.
+    const line = text.split('\n').map((l) => l.trim()).filter(Boolean).pop();
+    if (line && !/^[█▀▄ ]+$/.test(line)) lastLine = line.slice(0, 200);
   };
-  t.stdout.on('data', onData);
-  t.stderr.on('data', onData);
-  t.on('exit', () => {
+  tunnel.stdout.on('data', onData);
+  tunnel.stderr.on('data', onData);
+  tunnel.on('exit', (code) => {
     if (stopping) return;
-    console.log('[tunnel] соединение оборвалось, переподключаюсь через 3 с');
-    setTimeout(startTunnel, 3000);
+    // Соединение продержалось больше минуты — считаем его удачным и начинаем отсчёт заново.
+    delay = Date.now() - startedAt > 60_000 ? 5 : Math.min(delay * 2, 300);
+    console.log(`[tunnel] соединение оборвалось (код ${code}${lastLine ? `, ответ: ${lastLine}` : ''}), переподключаюсь через ${delay} с`);
+    setTimeout(startTunnel, delay * 1000);
   });
-  process.once('SIGINT', () => { stopping = true; t.kill(); bot?.kill(); setTimeout(() => process.exit(0), 300); });
+}
+
+process.once('SIGINT', stop);
+process.once('SIGTERM', stop);
+function stop() {
+  stopping = true;
+  tunnel?.kill();
+  bot?.kill();
+  setTimeout(() => process.exit(0), 300);
 }
 
 startTunnel();
