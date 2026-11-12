@@ -68,24 +68,29 @@ function switcher(className, items, current, pick) {
 
 // ---------- вход ----------
 
+let loginName = ''; // чтобы логин не пропадал, пока форма перерисовывается
+
 function renderLogin(error) {
-  const user = el('input', { type: 'text', name: 'username', autocomplete: 'username', required: true });
-  const pass = el('input', { type: 'password', name: 'password', autocomplete: 'current-password', required: true });
-  const btn = el('button', { className: 'primary', type: 'submit', textContent: 'Увійти' });
-  const err = el('p', { className: 'error', textContent: error ?? '' });
+  const pending = !!data?.loggingIn;
+  const user = el('input', { type: 'text', name: 'username', autocomplete: 'username', required: true, value: loginName, disabled: pending });
+  const pass = el('input', { type: 'password', name: 'password', autocomplete: 'current-password', required: true, disabled: pending });
+  const btn = el('button', { className: 'primary', type: 'submit', textContent: pending ? 'Входжу…' : 'Увійти', disabled: pending });
+  const err = el('p', { className: 'error', textContent: pending ? '' : error ?? '' });
   const form = el('form', {},
     el('label', {}, 'Логін учня', user),
     el('label', {}, 'Пароль', pass),
+    pending && el('p', { className: 'muted', textContent: 'Перевіряю логін і пароль у щоденнику, це кілька секунд…' }),
     err, btn);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    loginName = user.value;
     btn.disabled = true;
     btn.textContent = 'Входжу…';
     err.textContent = '';
     try {
       data = await api('/api/login', { username: user.value, password: pass.value });
       render();
-      watchSync();
+      if (data.loggedIn) watchSync(); else watchLogin();
     } catch (ex) {
       err.textContent = ex.message;
       btn.disabled = false;
@@ -98,6 +103,27 @@ function renderLogin(error) {
     form);
 }
 
+// Сервер входит в дневник в фоне; спрашиваем раз в полторы секунды, чем кончилось.
+let watchingLogin = false;
+async function watchLogin() {
+  if (watchingLogin || !data?.loggingIn) return;
+  watchingLogin = true;
+  try {
+    for (let i = 0; i < 80; i++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      const st = await api('/api/status');
+      if (st.loggingIn) continue;
+      data = st.loggedIn ? await api('/api/state') : { loggedIn: false, error: st.loginError ?? 'Не вдалося увійти. Спробуй ще раз' };
+      break;
+    }
+  } catch (e) {
+    data = { loggedIn: false, error: e.message };
+  }
+  watchingLogin = false;
+  render();
+  watchSync();
+}
+
 // ---------- вкладка «Домашка» ----------
 
 function taskNode(t, today) {
@@ -107,7 +133,7 @@ function taskNode(t, today) {
     box,
     el('div', { className: 'body' },
       el('div', { className: 'subject', textContent: t.subject }),
-      el('div', { className: 'text', textContent: t.text }),
+      el('div', { className: t.text ? 'text' : 'text none', textContent: t.text || 'Без тексту завдання' }),
       el('div', { className: 'meta' },
         t.removed && el('span', { className: 'tag danger', textContent: 'прибрано вчителем' }),
         t.archived && el('span', { className: 'tag', textContent: 'до підключення бота' }),
@@ -137,15 +163,54 @@ function taskNode(t, today) {
   return li;
 }
 
+let subjectsOpen = false; // раскрыт ли список предметов в фильтре
+
+function setHidden(list) {
+  data.hiddenSubjects = list;
+  render();
+  api('/api/prefs', { hiddenSubjects: list }).catch(() => { /* останется до следующего открытия */ });
+}
+
+/** Фильтр предметов: кнопка с числом показанных и раскрывающийся список переключателей. */
+function subjectFilter(hidden) {
+  const subjects = [...new Set(data.tasks.filter((t) => !t.removed).map((t) => t.subject))].sort((a, b) => a.localeCompare(b, 'uk'));
+  if (subjects.length < 2) return [];
+  const shownCount = subjects.filter((x) => !hidden.has(x)).length;
+  const toggle = el('button', { className: 'filter-toggle',
+    textContent: `Предмети: ${shownCount === subjects.length ? 'усі' : `${shownCount} з ${subjects.length}`} ${subjectsOpen ? '▴' : '▾'}` });
+  toggle.setAttribute('aria-expanded', String(subjectsOpen));
+  toggle.addEventListener('click', () => { subjectsOpen = !subjectsOpen; render(); });
+  if (!subjectsOpen) return [toggle];
+
+  const chips = subjects.map((name) => {
+    const b = el('button', { textContent: name });
+    b.setAttribute('aria-pressed', String(!hidden.has(name)));
+    b.addEventListener('click', () => {
+      const next = new Set(hidden);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      setHidden([...next]);
+    });
+    return b;
+  });
+  const all = el('button', { className: 'mini', textContent: 'Показати всі', disabled: hidden.size === 0 });
+  all.addEventListener('click', () => setHidden([]));
+  const none = el('button', { className: 'mini', textContent: 'Сховати всі', disabled: shownCount === 0 });
+  none.addEventListener('click', () => setHidden(subjects));
+  return [toggle, el('div', { className: 'subjects' }, ...chips), el('div', { className: 'subjects-actions' }, all, none)];
+}
+
 function renderHomework(today) {
   if (answering) return renderAnswer();
   // Прогресс считаем по текущей неделе и дальше, плюс всё несделанное из прошлого.
   const monday = mondayOf(today);
-  const live = data.tasks.filter((t) => !t.removed && !t.archived && (t.due >= monday || !t.done));
+  // Скрытые предметы не показываются и не идут в прогресс.
+  const hidden = new Set(data.hiddenSubjects ?? []);
+  const visible = data.tasks.filter((t) => !hidden.has(t.subject));
+  const live = visible.filter((t) => !t.removed && !t.archived && (t.due >= monday || !t.done));
   const doneCount = live.filter((t) => t.done).length;
   const pct = live.length ? Math.round((doneCount / live.length) * 100) : 0;
 
-  const shown = data.tasks.filter((t) => (filter === 'todo' ? !t.done && !t.removed && !t.archived : filter === 'done' ? t.done : true));
+  const shown = visible.filter((t) => (filter === 'todo' ? !t.done && !t.removed && !t.archived : filter === 'done' ? t.done : true));
   const groups = new Map();
   for (const t of shown) {
     const key = filter === 'todo' && t.due < today ? 'overdue' : t.due;
@@ -163,12 +228,13 @@ function renderHomework(today) {
         el('span', { className: 'muted', textContent: `залишилось ${live.length - doneCount}` })),
       el('div', { className: 'bar' }, el('i', { style: `width:${pct}%` }))),
     switcher('tabs', [['todo', 'Треба зробити'], ['done', 'Зроблено'], ['all', 'Усі']], filter, (id) => { filter = id; render(); }),
+    ...subjectFilter(hidden),
     ...(keys.length
       ? keys.flatMap((k) => [
           el('h2', { className: k === 'overdue' ? 'overdue' : '', textContent: k === 'overdue' ? 'Прострочено' : dayLabel(k, today) }),
           el('ul', {}, ...groups.get(k).map((t) => taskNode(t, today))),
         ])
-      : [empty(filter === 'todo' ? '🎉 Усе зроблено' : 'Тут поки порожньо')]),
+      : [empty(hidden.size && !visible.length ? 'Усі предмети сховано' : filter === 'todo' ? '🎉 Усе зроблено' : 'Тут поки порожньо')]),
     data.tasks.length > 0 && el('p', { className: 'muted center', textContent:
       `Усього завдань: ${data.tasks.length}, найстаріше від ${shortDate(data.tasks[0].due)}. В архіві: ${data.tasks.filter((t) => t.archived).length}` }),
   ];
@@ -254,6 +320,8 @@ async function sendAnswer() {
     a.data = await api(`/api/tasks/${a.task.id}/answer`, { text: a.text });
     a.text = a.data.text;
     a.saved = true;
+    // Список мог обновиться, пока был открыт этот экран, — отмечаем задание в актуальных данных.
+    a.task = data.tasks.find((x) => x.id === a.task.id) ?? a.task;
     Object.assign(a.task, { done: true, answered: true, archived: false, changed: false, files: a.data.files.length });
     tg?.HapticFeedback?.notificationOccurred?.('success');
   } catch (e) {
@@ -275,6 +343,20 @@ async function removeFile(file) {
   if (answering === a) render();
 }
 
+/** Открывает файл задания в браузере по одноразовой ссылке на пять минут. */
+async function openTaskFile(file) {
+  const a = answering;
+  try {
+    const { url } = await api(`/api/tasks/${a.task.id}/files/${file.id}/link`, {});
+    const full = new URL(url, location.origin).href;
+    if (tg?.openLink) tg.openLink(full);
+    else if (!window.open(full, '_blank', 'noopener')) location.assign(full);
+  } catch (e) {
+    a.error = e.message;
+    if (answering === a) render();
+  }
+}
+
 function renderAnswer() {
   const a = answering;
   const t = a.task;
@@ -286,7 +368,7 @@ function renderAnswer() {
     back,
     el('h2', { className: 'title', textContent: t.subject }),
     el('p', { className: 'muted due', textContent: [`На ${shortDate(t.due)}`, t.topic].filter(Boolean).join(' · ') }),
-    el('div', { className: 'card tasktext' }, linkified(t.text)),
+    el('div', { className: `card tasktext${t.text ? '' : ' none'}` }, t.text ? linkified(t.text) : 'Без тексту завдання'),
   ];
   if (!d) {
     const retry = el('button', { className: 'primary', textContent: 'Спробувати ще раз' });
@@ -321,24 +403,26 @@ function renderAnswer() {
   const add = el('button', { className: 'secondary', textContent: '📎 Додати файл', disabled: !!a.busy });
   add.addEventListener('click', () => picker.click());
 
-  const fileRow = (name, note, onRemove) => {
+  // file — файл, уже лежащий в дневнике: его имя становится кнопкой «открыть».
+  const fileRow = (name, note, onRemove, file) => {
     const x = onRemove && el('button', { className: 'x', textContent: '×', disabled: !!a.busy });
     if (x) { x.setAttribute('aria-label', `Видалити ${name}`); x.addEventListener('click', onRemove); }
-    return el('li', { className: 'file' }, el('span', { className: 'name', textContent: name }), el('span', { className: 'muted', textContent: note }), x);
+    const title = el(file ? 'button' : 'span', { className: 'name', textContent: name });
+    if (file) title.addEventListener('click', () => openTaskFile(file));
+    return el('li', { className: 'file' }, title, el('span', { className: 'muted', textContent: note }), x);
   };
 
   return [
     ...head,
     d.teacherFiles.length > 0 && el('h2', { textContent: 'Файли вчителя' }),
-    d.teacherFiles.length > 0 && el('ul', {}, ...d.teacherFiles.map((f) => fileRow(f.name, fileSize(f.size)))),
-    d.teacherFiles.length > 0 && el('p', { className: 'muted legend', textContent: 'Відкрити файли вчителя поки можна тільки в самому щоденнику.' }),
+    d.teacherFiles.length > 0 && el('ul', {}, ...d.teacherFiles.map((f) => fileRow(f.name, fileSize(f.size), null, f))),
 
     el('h2', { textContent: 'Моя відповідь' }),
     el('p', { className: `status ${d.status}`, textContent: statusText }),
     d.teacherComment && el('p', { className: 'card comment' }, el('b', { textContent: 'Коментар учителя: ' }), d.teacherComment),
     area,
     (d.files.length > 0 || a.pending.length > 0) && el('ul', {},
-      ...d.files.map((f) => fileRow(f.name, fileSize(f.size), locked ? null : () => removeFile(f))),
+      ...d.files.map((f) => fileRow(f.name, fileSize(f.size), locked ? null : () => removeFile(f), f)),
       ...a.pending.map((f, i) => fileRow(f.name, `${fileSize(f.size)} · ще не надіслано`, () => { a.pending.splice(i, 1); render(); }))),
     !locked && picker,
     !locked && add,
@@ -599,7 +683,10 @@ function render() {
   if (!data?.loggedIn) return renderLogin(data?.error);
   const today = todayIso();
 
-  const refresh = el('button', { className: `icon-btn${busy || data.syncing ? ' spin' : ''}`, textContent: '↻', title: 'Оновити' });
+  // Шесть лучей с убывающей яркостью; во время обновления яркость «бежит» по кругу шагами.
+  const refresh = el('button', { className: `icon-btn${busy || data.syncing ? ' spin' : ''}`, title: 'Оновити' },
+    svg('svg', { viewBox: '0 0 24 24', class: 'spokes', 'aria-hidden': 'true' },
+      ...[1, 0.82, 0.64, 0.46, 0.3, 0.16].map((opacity, i) => svg('line', { x1: 12, y1: 3, x2: 12, y2: 8.5, opacity, transform: `rotate(${-60 * i} 12 12)` }))));
   refresh.setAttribute('aria-label', 'Оновити');
   refresh.addEventListener('click', sync);
 
@@ -652,20 +739,22 @@ async function sync() {
   watchSync();
 }
 
-// Пока сервер синхронизируется в фоне, раз в 2 секунды спрашиваем, не закончил ли,
-// и только после этого забираем обновлённые данные целиком.
+// Пока сервер синхронизируется в фоне, раз в 2 секунды спрашиваем, как дела. Данные забираем,
+// когда что-то изменилось: после быстрого первого прохода и в самом конце.
 let watching = false;
 async function watchSync() {
   if (watching || !data?.syncing) return;
   watching = true;
   try {
-    for (let i = 0; i < 90; i++) {
+    for (let i = 0; i < 150; i++) {
       await new Promise((r) => setTimeout(r, 2000));
-      if (!(await api('/api/status')).syncing) break;
+      const st = await api('/api/status');
+      if (st.syncing && st.lastSync === data.lastSync) continue;
+      data = await api('/api/state');
+      // Не перерисовываем экран, пока человек печатает ответ: сбилось бы место ввода.
+      if (document.activeElement?.tagName !== 'TEXTAREA') render();
+      if (!data.syncing) break;
     }
-    data = await api('/api/state');
-    // Не перерисовываем экран, пока человек печатает ответ: сбилось бы место ввода.
-    if (document.activeElement?.tagName !== 'TEXTAREA') render();
   } catch { /* связь пропала: данные обновятся при следующем открытии */ }
   watching = false;
 }
@@ -677,6 +766,7 @@ try {
   scrollToToday = view === 'schedule';
   render();
   watchSync();
+  watchLogin();
 } catch (e) {
   app.replaceChildren(empty(e.message));
 }

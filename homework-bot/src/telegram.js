@@ -1,5 +1,8 @@
 // Минимальный клиент Telegram Bot API на long polling, без зависимостей.
-export function createBot(token, { publicUrl, onDelete }) {
+//
+// commands: { '/today': { description, run: async (tgId) => ({ text, button }) }, ... }
+// Команды с description показываются в меню бота.
+export function createBot(token, { publicUrl, commands = {} }) {
   const base = `https://api.telegram.org/bot${token}`;
 
   async function call(method, body, timeout = 15000) {
@@ -14,7 +17,7 @@ export function createBot(token, { publicUrl, onDelete }) {
     return data.result;
   }
 
-  const openButton = { inline_keyboard: [[{ text: '📋 Відкрити список', web_app: { url: publicUrl } }]] };
+  const openButton = { inline_keyboard: [[{ text: '📋 Відкрити щоденник', web_app: { url: publicUrl } }]] };
 
   async function send(chatId, text, withButton = false) {
     try {
@@ -24,27 +27,32 @@ export function createBot(token, { publicUrl, onDelete }) {
     }
   }
 
+  const help = () => [
+    'Привіт! Я показую домашку, розклад і оцінки з «Єдиної Школи» в одному місці: ' +
+    'завдання списком із галочками, здача відповіді прямо звідси, сповіщення про нові завдання й оцінки.',
+    'Пароль від щоденника я не зберігаю: він потрібен один раз для входу, далі працює тимчасовий токен.',
+    Object.entries(commands).filter(([, c]) => c.description).map(([name, c]) => `${name} — ${c.description}`).join('\n'),
+  ].join('\n\n');
+
   async function handle(update) {
     const msg = update.message;
     if (!msg?.text || msg.chat.type !== 'private') return;
-    const cmd = msg.text.split(/[\s@]/)[0];
-    if (cmd === '/start' || cmd === '/help') {
-      await send(msg.chat.id,
-        'Привіт! Я показую домашку, розклад і оцінки з «Єдиної Школи» в одному місці: ' +
-        'завдання списком із галочками, здача відповіді прямо звідси, сповіщення про нові завдання й оцінки.\n\n' +
-        'Пароль від щоденника я не зберігаю: він потрібен один раз для входу, далі працює тимчасовий токен.\n\n' +
-        '/delete — стерти всі мої дані', true);
-    } else if (cmd === '/delete') {
-      onDelete(msg.from.id);
-      await send(msg.chat.id, 'Готово: токен і список завдань стерто. Щоб почати знову, надішли /start.');
-    } else {
-      await send(msg.chat.id, 'Відкрий список кнопкою нижче.', true);
+    const cmd = msg.text.split(/[\s@]/)[0].toLowerCase();
+    if (cmd === '/start' || cmd === '/help') return send(msg.chat.id, help(), true);
+    if (commands[cmd]) {
+      const { text, button = false } = await commands[cmd].run(msg.from.id);
+      return send(msg.chat.id, text, button);
     }
+    return send(msg.chat.id, 'Відкрий щоденник кнопкою нижче або надішли /help.', true);
   }
 
   async function poll() {
     let offset = 0;
-    await call('setChatMenuButton', { menu_button: { type: 'web_app', text: 'Домашка', web_app: { url: publicUrl } } }).catch((e) => console.error('[tg]', e.message));
+    const warn = (e) => console.error('[tg]', e.message);
+    await call('setChatMenuButton', { menu_button: { type: 'web_app', text: 'Домашка', web_app: { url: publicUrl } } }).catch(warn);
+    await call('setMyCommands', {
+      commands: Object.entries(commands).filter(([, c]) => c.description).map(([name, c]) => ({ command: name.slice(1), description: c.description })),
+    }).catch(warn);
     for (;;) {
       try {
         const updates = await call('getUpdates', { offset, timeout: 50, allowed_updates: ['message'] }, 60000);
@@ -59,5 +67,5 @@ export function createBot(token, { publicUrl, onDelete }) {
     }
   }
 
-  return { send, poll };
+  return { send, poll, handle };
 }

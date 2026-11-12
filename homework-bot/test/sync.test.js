@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { diffTasks, syncUser, describeDiff, schoolYearStart, weekEnd } from '../src/sync.js';
 import { openDb } from '../src/db.js';
-import { encrypt, decrypt, verifyInitData } from '../src/crypto.js';
+import { encrypt, decrypt, verifyInitData, signToken, verifyToken } from '../src/crypto.js';
+import { kyivNow, nextSchoolDay, scheduleText, digestText } from '../src/digest.js';
+import { createBot } from '../src/telegram.js';
 import {
   appointmentsToTasks, appointmentsToLessons, appointmentsToGrades, mergeDuplicates, findLoginActionId, absorbCookies,
   parseAcademicYear, missingStats, getAnswer, submitAnswer, uploadAnswerFile, removeAnswerFile,
@@ -93,7 +95,11 @@ test('разбор ответа дневника в список заданий'
     { Id: 2, Subject: 'Фізика', Date: '2026-11-13', Embed: null },
     null,
   ]);
-  assert.deepEqual(tasks, [{ id: '7', subject: 'Алгебра', text: '№ 245', topic: 'Рівняння', due: '2026-11-12', assigned: '2026-11-10', files: 2, answered: true }]);
+  assert.deepEqual(tasks, [
+    { id: '7', subject: 'Алгебра', text: '№ 245', topic: 'Рівняння', due: '2026-11-12', assigned: '2026-11-10', files: 2, answered: true },
+    // запись без текста тоже остаётся: на неё в дневнике можно сдать ответ
+    { id: '8', subject: 'Алгебра', text: '', topic: null, due: '2026-11-12', assigned: null, files: 0, answered: false },
+  ]);
   const one = (h) => appointmentsToTasks([{ Subject: 'A', Date: '2026-11-12', Embed: { TargetHomeworks: [{ Id: 1, Description: 'x', ...h }] } }])[0].answered;
   assert.equal(one({}), false);
   assert.equal(one({ HaveAnswer: true }), true);
@@ -431,6 +437,157 @@ test('ответ на задание: запросы в том же формат
     answers = [];
     refuseWrites = true;
     await assert.rejects(submitAnswer(session, '77', 'текст'), { code: 'forbidden' });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('быстрый первый проход берёт только ближайшие недели, а следующий молча дотягивает год', async () => {
+  const db = openDb(':memory:');
+  db.prepare("INSERT INTO users (tg_id, created_at) VALUES (1, 'x')").run();
+  const iso = (n) => { const d = new Date(); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const mk = (id, due) => ({ id, subject: 'A', text: id, topic: null, due, assigned: due, files: 0, answered: false });
+  const grade = (id, date) => ({ id, subject: 'A', date, lessonDate: date, label: '10', value: 10, kind: 'current', type: 'Урок', topic: null, comment: null });
+  const calls = [];
+  const provider = {
+    fetchDiary: async (_s, from) => {
+      calls.push(from);
+      const near = { tasks: [mk('soon', iso(1))], lessons: [], grades: [grade('g-near', iso(-1))] };
+      return from === iso(-10) ? near
+        : { tasks: [...near.tasks, mk('september', iso(-40))], lessons: [], grades: [...near.grades, grade('g-old', iso(-40))] };
+    },
+  };
+  const cfg = { daysBack: 10, daysForward: 14 };
+
+  const quick = await syncUser(db, provider, 1, {}, { ...cfg, quick: true });
+  assert.equal(calls[0], iso(-10));
+  assert.equal(quick.first, true);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n, 1);
+  const after = db.prepare('SELECT last_full_sync, extras_synced, task_rules FROM users').get();
+  assert.deepEqual({ ...after }, { last_full_sync: null, extras_synced: 0, task_rules: 1 });
+
+  const full = await syncUser(db, provider, 1, {}, cfg);
+  assert.ok(calls[1] < iso(-10), 'второй проход идёт с начала года');
+  assert.equal(describeDiff(full), null, 'старые задания и оценки не считаются новыми');
+  const rows = Object.fromEntries(db.prepare('SELECT task_id, archived FROM tasks').all().map((r) => [r.task_id, r.archived]));
+  assert.deepEqual(rows, { soon: 0, september: 1 });
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM grades').get().n, 2);
+});
+
+test('смена правил отбора: записи, которые бот раньше пропускал, принимаются один раз молча', async () => {
+  const db = openDb(':memory:');
+  db.prepare("INSERT INTO users (tg_id, created_at) VALUES (1, 'x')").run();
+  const iso = (n) => { const d = new Date(); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const mk = (id, due, text = id) => ({ id, subject: 'A', text, topic: null, due, assigned: due, files: 0, answered: false });
+  let list = [mk('a', iso(1))];
+  const provider = { fetchTasks: async () => list };
+  const cfg = { daysBack: 10, daysForward: 14 };
+  await syncUser(db, provider, 1, {}, cfg);
+  db.prepare('UPDATE users SET task_rules = 1').run(); // пользователь из версии со старыми правилами
+
+  list = [...list, mk('past-empty', iso(-3), ''), mk('future-empty', iso(2), '')];
+  const res = await syncUser(db, provider, 1, {}, cfg);
+  assert.equal(describeDiff(res), null);
+  const rows = Object.fromEntries(db.prepare('SELECT task_id, archived, backdated FROM tasks').all().map((r) => [r.task_id, [r.archived, r.backdated]]));
+  assert.deepEqual(rows, { a: [0, 0], 'past-empty': [1, 0], 'future-empty': [0, 0] });
+
+  // дальше всё как обычно: новое задание даёт уведомление
+  list = [...list, mk('new', iso(3), '')];
+  assert.match(describeDiff(await syncUser(db, provider, 1, {}, cfg)), /без тексту/);
+});
+
+test('подписанная ссылка: срок действия и защита от подмены', () => {
+  const key = 'cd'.repeat(32);
+  const now = Date.now();
+  const token = signToken({ u: 7, t: '77', f: '9' }, key, 300, now);
+  assert.deepEqual({ ...verifyToken(token, key, now), exp: undefined }, { u: 7, t: '77', f: '9', exp: undefined });
+  assert.equal(verifyToken(token, key, now + 301_000), null, 'через пять минут не действует');
+  assert.equal(verifyToken(token, 'ab'.repeat(32), now), null, 'чужой ключ');
+  const [body, mac] = token.split('.');
+  const forged = Buffer.from(JSON.stringify({ u: 8, t: '77', f: '9', exp: 9e9 })).toString('base64url');
+  assert.equal(verifyToken(`${forged}.${mac}`, key, now), null, 'подменили пользователя');
+  assert.equal(verifyToken(body, key, now), null);
+  assert.equal(verifyToken('', key, now), null);
+});
+
+test('киевское время: зима и лето', () => {
+  assert.deepEqual(kyivNow(new Date('2026-11-12T16:30:00Z')), { date: '2026-11-12', minutes: 18 * 60 + 30 });
+  assert.deepEqual(kyivNow(new Date('2026-06-30T21:30:00Z')), { date: '2026-07-01', minutes: 30 }); // летом +3, уже следующий день
+});
+
+test('расписание на день и вечерняя сводка', () => {
+  const db = openDb(':memory:');
+  db.prepare("INSERT INTO users (tg_id, created_at) VALUES (1, 'x')").run();
+  const lesson = db.prepare('INSERT INTO lessons (tg_id, lesson_id, date, number, start, duration, subject, room, status) VALUES (1, ?, ?, ?, ?, 45, ?, ?, ?)');
+  const task = db.prepare("INSERT INTO tasks (tg_id, task_id, subject, text, due, done, archived, removed, first_seen) VALUES (1, ?, ?, ?, ?, ?, ?, ?, 'x')");
+  // четверг 12.11 — сегодня; пятница 13.11 — уроки отменены; следующий учебный день — понедельник 16.11
+  lesson.run('a', '2026-11-12', 1, '08:30', 'Алгебра', '214', 'normal');
+  lesson.run('b', '2026-11-12', 2, '09:25', 'Хімія', '308', 'replacement');
+  lesson.run('c', '2026-11-12', 3, '10:25', 'Геометрія', 'спортзал', 'canceled');
+  lesson.run('d', '2026-11-13', 1, '08:30', 'Фізика', '305', 'canceled');
+  lesson.run('e', '2026-11-16', 1, '08:30', 'Алгебра', '214', 'normal');
+  lesson.run('f', '2026-11-16', 2, '09:25', 'Фізична культура', null, 'normal');
+  task.run('1', 'Алгебра', '№ 1', '2026-11-12', 0, 0, 0);
+  task.run('2', 'Алгебра', '§12, № 245', '2026-11-16', 0, 0, 0);
+  task.run('3', 'Фізична культура', '', '2026-11-16', 0, 0, 0);
+  task.run('4', 'Біологія', 'зроблене', '2026-11-16', 1, 0, 0);
+  task.run('5', 'Хімія', 'прибране вчителем', '2026-11-16', 0, 0, 1);
+
+  assert.equal(scheduleText(db, 1, '2026-11-12', '2026-11-12'), [
+    '📅 Сьогодні, 12.11',
+    '1. 08:30 Алгебра · каб. 214 · ДЗ',
+    '2. 09:25 Хімія · каб. 308 (заміна)',
+    '3. 10:25 Геометрія · спортзал — скасовано',
+  ].join('\n'));
+  assert.equal(scheduleText(db, 1, '2026-11-14', '2026-11-12'), '📅 Субота, 14.11\nУроків немає.');
+
+  assert.equal(nextSchoolDay(db, 1, '2026-11-12'), '2026-11-16', 'день с одними отменёнными уроками пропускается');
+  assert.equal(nextSchoolDay(db, 1, '2026-11-16'), '2026-11-17', 'расписания нет — просто следующий день');
+
+  assert.equal(digestText(db, 1, '2026-11-12'), [
+    '📚 На понеділок, 16.11 3 завдання, не зроблено 2:',
+    '• Алгебра: §12, № 245',
+    '• Фізична культура: (без тексту)',
+  ].join('\n'));
+  // скрытый предмет в сводку не попадает
+  db.prepare("UPDATE users SET hidden_subjects = ? WHERE tg_id = 1").run(JSON.stringify(['Фізична культура']));
+  assert.match(digestText(db, 1, '2026-11-12'), /2 завдання, не зроблено 1:/);
+  // всё сделано — писать не о чем
+  db.prepare("UPDATE tasks SET done = 1 WHERE task_id = '2'").run();
+  assert.equal(digestText(db, 1, '2026-11-12'), null);
+  // «завтра», когда следующий учебный день — действительно завтра
+  db.prepare("UPDATE tasks SET done = 0 WHERE task_id = '2'").run();
+  assert.match(digestText(db, 1, '2026-11-15'), /^📚 На завтра /);
+});
+
+test('бот в чате: команды, справка и неизвестные сообщения', async () => {
+  const sent = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    sent.push({ method: String(url).split('/').pop(), ...JSON.parse(init.body) });
+    return new Response(JSON.stringify({ ok: true, result: {} }));
+  };
+  try {
+    const bot = createBot('1:x', {
+      publicUrl: 'https://app.example',
+      commands: {
+        '/today': { description: 'розклад на сьогодні', run: async (id) => ({ text: `розклад для ${id}` }) },
+        '/hidden': { run: async () => ({ text: 'секрет', button: true }) },
+      },
+    });
+    const msg = (text, type = 'private') => ({ message: { text, chat: { id: 5, type }, from: { id: 5 } } });
+    await bot.handle(msg('/today'));
+    await bot.handle(msg('/TODAY@some_bot extra'));
+    await bot.handle(msg('/start'));
+    await bot.handle(msg('привіт'));
+    await bot.handle(msg('/today', 'group')); // в группах бот молчит
+    assert.equal(sent.length, 4);
+    assert.deepEqual([sent[0].text, sent[1].text], ['розклад для 5', 'розклад для 5']);
+    assert.equal(sent[0].reply_markup, undefined);
+    assert.match(sent[2].text, /\/today — розклад на сьогодні/);
+    assert.doesNotMatch(sent[2].text, /hidden/);
+    assert.equal(sent[2].reply_markup.inline_keyboard[0][0].web_app.url, 'https://app.example');
+    assert.match(sent[3].text, /\/help/);
   } finally {
     globalThis.fetch = realFetch;
   }

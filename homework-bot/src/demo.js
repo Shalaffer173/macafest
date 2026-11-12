@@ -50,7 +50,9 @@ function lessonDate(subject, k) {
 
 let tick = 0;
 
-export async function login() {
+export async function login(username) {
+  await new Promise((r) => setTimeout(r, 1200)); // настоящий вход тоже не мгновенный
+  if (username === 'wrong') throw Object.assign(new Error('Невірний логін або пароль'), { code: 'bad_credentials' });
   return { demo: true, studentName: 'Демо Учень', schoolName: 'Демо-ліцей' };
 }
 
@@ -137,6 +139,14 @@ export async function submitAnswer(_session, id, text) {
   return structuredClone(a);
 }
 
+export async function openFile(_session, id, fileId) {
+  const a = answerOf(String(id));
+  const file = [...a.files, ...a.teacherFiles].find((f) => f.id === Number(fileId));
+  if (!file) throw Object.assign(new Error('Файл не знайдено'), { code: 'file_missing' });
+  const res = new Response(`Демо-файл «${file.name}»\n`);
+  return { name: file.name, mime: 'text/plain', size: null, body: res.body };
+}
+
 export async function fetchYear() {
   const today = todayIso();
   const y = Number(today.slice(0, 4)) - (today.slice(5, 7) >= '08' ? 0 : 1);
@@ -161,6 +171,7 @@ function makeTasks() {
     task('105', 'Фізика', 'Задачі 8.3, 8.7; підготуватися до лабораторної', -1, { topic: 'Закони Ньютона' }),
     task('106', 'Геометрія', '№ 318, 322', -1),
     task('107', 'Біологія', 'Конспект §14, намалювати будову клітини', 1),
+    task('110', 'Фізична культура', '', 1), // без текста: учитель задал устно, но ответ прикрепить можно
     task('109', 'Зарубіжна література', 'Прочитати повість і написати короткий відгук: https://example.com/povist', -1),
   ];
   // Со второй синхронизации «учитель» добавляет задание задним числом.

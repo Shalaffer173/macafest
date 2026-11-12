@@ -42,3 +42,27 @@ export function verifyInitData(initData, botToken, maxAgeSec = 86400, now = Date
     return user && Number.isInteger(user.id) ? user : null;
   } catch { return null; }
 }
+
+/**
+ * Короткоживущая подписанная ссылка: payload (объект) + срок действия, заверенные ключом сервера.
+ * Нужна там, где нельзя передать подпись Telegram в заголовке, — например, при скачивании файла браузером.
+ */
+export function signToken(payload, keyHex, ttlSec, now = Date.now()) {
+  const body = Buffer.from(JSON.stringify({ ...payload, exp: Math.floor(now / 1000) + ttlSec })).toString('base64url');
+  const mac = createHmac('sha256', Buffer.from(keyHex, 'hex')).update(`link:${body}`).digest('base64url');
+  return `${body}.${mac}`;
+}
+
+/** Возвращает payload или null, если подпись неверна или срок вышел. */
+export function verifyToken(token, keyHex, now = Date.now()) {
+  const [body, mac] = String(token ?? '').split('.');
+  if (!body || !mac) return null;
+  const expected = createHmac('sha256', Buffer.from(keyHex, 'hex')).update(`link:${body}`).digest();
+  let given;
+  try { given = Buffer.from(mac, 'base64url'); } catch { return null; }
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    return typeof payload.exp === 'number' && payload.exp >= now / 1000 ? payload : null;
+  } catch { return null; }
+}

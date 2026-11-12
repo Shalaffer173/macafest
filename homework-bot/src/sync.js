@@ -75,17 +75,27 @@ export function schoolYearStart(todayIso) {
   return `${todayIso.slice(5, 7) >= '08' ? y : y - 1}-09-01`;
 }
 
-/** Одна синхронизация пользователя. Возвращает { diff, first } для уведомлений. */
+// Поколение правил отбора заданий. Когда бот начинает показывать то, что раньше пропускал
+// (сейчас — задания без текста), у давних пользователей разом «появляются» старые записи.
+// При смене поколения они один раз принимаются молча: прошедшие уходят в архив, уведомлений нет.
+export const TASK_RULES = 2;
+
+/**
+ * Одна синхронизация пользователя. Возвращает { diff, first, ... } для уведомлений.
+ * cfg.quick — быстрый первый проход: только ближайшие недели, чтобы сразу было что показать.
+ */
 export async function syncUser(db, provider, tgId, session, cfg) {
-  const user = db.prepare('SELECT last_sync, covered_from, last_full_sync, extras_synced, year_start, semester2_start FROM users WHERE tg_id = ?').get(tgId);
+  const user = db.prepare('SELECT last_sync, covered_from, last_full_sync, extras_synced, year_start, semester2_start, task_rules FROM users WHERE tg_id = ?').get(tgId);
+  const quick = cfg.quick === true;
+  const rulesChanged = (user?.task_rules ?? 1) < TASK_RULES;
   const lastSyncDay = user?.last_sync ? user.last_sync.slice(0, 10) : null;
   // Расписание и оценки умеет отдавать не каждый источник (в тестах — только задания).
   const hasExtras = typeof provider.fetchDiary === 'function';
   // Первая загрузка оценок идёт за весь год и молча: иначе каждая старая оценка стала бы «новой».
   const extrasFirst = hasExtras && !user?.extras_synced;
   // Обычно перечитываем последние недели, а раз в сутки и при первом входе — весь учебный год.
-  const fullDue = extrasFirst || !user?.last_full_sync
-    || Date.now() - Date.parse(user.last_full_sync) > (cfg.fullSyncHours ?? 24) * 3600_000;
+  const fullDue = !quick && (extrasFirst || rulesChanged || !user?.last_full_sync
+    || Date.now() - Date.parse(user.last_full_sync) > (cfg.fullSyncHours ?? 24) * 3600_000);
   const recent = shift(today(), -cfg.daysBack);
   // Начало года и второго семестра берём из дневника, а пока их нет — считаем от 1 сентября.
   // Дата из дневника принимается, только если она похожа на начало текущего учебного года.
@@ -133,8 +143,9 @@ export async function syncUser(db, provider, tgId, session, cfg) {
     for (const t of diff.added) {
       // Задания из периода, который бот раньше не видел (до первого входа или до расширения
       // окна), уходят в архив: бот не знает, сделаны ли они, и не сообщает о них как о новых.
-      t.archived = !t.answered && t.due < archiveBefore && t.due < today();
-      if (t.archived) t.backdated = false;
+      t.archived = !t.answered && t.due < today() && (t.due < archiveBefore || rulesChanged);
+      t.silent = rulesChanged; // появилось из-за новых правил бота, а не в дневнике
+      if (t.archived || t.silent) t.backdated = false;
       ins.run(tgId, t.id, t.subject, t.text, t.topic, t.due, t.assigned, t.files, t.backdated ? 1 : 0, now, t.archived ? 1 : 0,
         t.answered ? 1 : 0, t.answered ? 1 : 0, t.answered ? now : null);
     }
@@ -145,10 +156,14 @@ export async function syncUser(db, provider, tgId, session, cfg) {
     if (diary.lessons) replaceLessons(db, tgId, diary.lessons, from, to);
     if (diary.grades) grades = replaceGrades(db, tgId, diary.grades, from, to);
     const covered = user?.covered_from && user.covered_from < from ? user.covered_from : from;
+    // Быстрый проход не считается ни полной загрузкой года, ни первой загрузкой оценок:
+    // следом идёт обычная синхронизация, которая дотянет остальное так же молча.
+    const fullDone = !quick && (from === yearStart || yearStart >= recent);
     db.prepare(`UPDATE users SET last_sync = ?, sync_error = NULL, covered_from = ?, last_full_sync = ?, extras_synced = ?,
-      year_start = ?, semester2_start = ? WHERE tg_id = ?`)
-      .run(now, covered, from === yearStart || yearStart >= recent ? now : user?.last_full_sync ?? null,
-        hasExtras || user?.extras_synced ? 1 : 0, yearStart, semester2, tgId);
+      year_start = ?, semester2_start = ?, task_rules = ? WHERE tg_id = ?`)
+      .run(now, covered, fullDone ? now : user?.last_full_sync ?? null,
+        (hasExtras && !quick) || user?.extras_synced ? 1 : 0, yearStart, semester2,
+        quick ? user?.task_rules ?? 1 : TASK_RULES, tgId);
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
@@ -168,14 +183,14 @@ export async function syncUser(db, provider, tgId, session, cfg) {
 }
 
 const fmt = (iso) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
-const cut = (s, n = 120) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+const cut = (s, n = 120) => (!s ? '(без тексту)' : s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 /** Текст уведомления о результатах синхронизации или null, если сообщать нечего. */
 export function describeDiff({ diff, first, grades, gradesSilent }) {
   if (first) return null; // при первом входе всё «новое», не шумим
   const lines = [];
   for (const t of diff.added) {
-    if (t.archived) continue;
+    if (t.archived || t.silent) continue;
     lines.push(t.backdated
       ? `⚠️ Додано заднім числом: ${t.subject} на ${fmt(t.due)}\n${cut(t.text)}`
       : `🆕 ${t.subject} на ${fmt(t.due)}\n${cut(t.text)}`);

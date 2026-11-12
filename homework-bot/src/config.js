@@ -20,6 +20,7 @@ export const config = {
   syncMinutes: Math.max(10, Number(env.SYNC_MINUTES || 30)),
   daysBack: 35, // сколько дней назад перечитывать, чтобы ловить задания задним числом
   fullSyncHours: 24, // как часто перечитывать весь учебный год с 1 сентября
+  digestHour: Math.min(21, Math.max(6, Number(env.DIGEST_HOUR || 18))), // час вечерней сводки по Киеву
   daysForward: 14,
 };
 

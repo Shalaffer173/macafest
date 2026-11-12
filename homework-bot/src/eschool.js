@@ -72,7 +72,7 @@ async function discoverLoginAction(jar) {
     const id = findLoginActionId(await res.text());
     if (id) return id;
   }
-  throw new EschoolError('site_changed', 'Не нашёл форму входа на сайте: похоже, он обновился');
+  throw new EschoolError('site_changed', 'Не знайшов форму входу на сайті щоденника: схоже, його оновили');
 }
 
 async function bindIdentity(jar, identity) {
@@ -81,7 +81,7 @@ async function bindIdentity(jar, identity) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(identity),
   });
-  if (!res.ok) throw new EschoolError('bind_failed', `Дневник не принял выбор школы (${res.status})`);
+  if (!res.ok) throw new EschoolError('bind_failed', `Щоденник не прийняв вибір школи (${res.status})`);
 }
 
 /** Вход по логину и паролю. Возвращает сессию для сохранения (без пароля). */
@@ -106,16 +106,16 @@ export async function login(username, password, log = () => {}) {
   log(`ответ на вход: ${res.status}, cookie: ${Object.keys(jar).join(', ') || 'нет'}`);
   if (!jar.session_token && !jar.refresh_token) {
     log(`начало ответа: ${answer.slice(0, 400)}`);
-    throw new EschoolError('bad_credentials', 'Неверный логин или пароль');
+    throw new EschoolError('bad_credentials', 'Невірний логін або пароль');
   }
 
   const list = await request(jar, `${DIARY}/api/v1/seplogin`);
-  if (!list.ok) throw new EschoolError('no_diary', `Дневник не открылся после входа (${list.status})`);
+  if (!list.ok) throw new EschoolError('no_diary', `Щоденник не відкрився після входу (${list.status})`);
   const items = ((await list.json()).Items ?? []).filter(Boolean);
   log(`роли в аккаунте: ${items.map((i) => i.role).join(', ') || 'нет'}`);
   const identity = items.find((i) => i.role === 'schoolboy');
   if (!identity) {
-    throw new EschoolError('not_student', 'В этом аккаунте нет роли ученика. Нужен логин ученика, а не родителя или учителя');
+    throw new EschoolError('not_student', 'У цьому акаунті немає ролі учня. Потрібен логін учня, а не батьків чи вчителя');
   }
   const session = {
     jar,
@@ -133,8 +133,18 @@ export async function login(username, password, log = () => {}) {
 /** Продление сессии по refresh_token. Бросает session_expired, если нужно входить заново. */
 export async function refresh(session) {
   const res = await request(session.jar, `${DIARY}/api/auth/refresh`, { method: 'POST' });
-  if (!res.ok) throw new EschoolError('session_expired', 'Сессия истекла, нужно войти заново');
+  if (!res.ok) throw new EschoolError('session_expired', 'Сесія закінчилась, потрібно увійти ще раз');
   await bindIdentity(session.jar, session.identity);
+}
+
+// Несколько запросов могут идти одновременно; если токен истёк у всех сразу,
+// продлеваем его один раз, а не каждый сам по себе.
+const refreshing = new WeakMap();
+function refreshOnce(session) {
+  if (!refreshing.has(session)) {
+    refreshing.set(session, refresh(session).finally(() => refreshing.delete(session)));
+  }
+  return refreshing.get(session);
 }
 
 /**
@@ -154,16 +164,16 @@ async function api(session, path, params, opts = {}) {
   }
   let res = await request(session.jar, url, init);
   if (res.status === 401 || res.status === 403) {
-    await refresh(session);
+    await refreshOnce(session);
     res = await request(session.jar, url, init);
     if (res.status === 401 || res.status === 403) {
       // Чтение после удачного продления всё равно не пускают — сессия негодна.
       // Запись могли запретить по делу (например, работу уже проверили): это не повод разлогинивать.
-      if (method === 'GET') throw new EschoolError('session_expired', 'Сессия истекла, нужно войти заново');
+      if (method === 'GET') throw new EschoolError('session_expired', 'Сесія закінчилась, потрібно увійти ще раз');
       throw new EschoolError('forbidden', `Щоденник не дозволив цю дію (${res.status})`);
     }
   }
-  if (!res.ok) throw new EschoolError('api_error', `Дневник ответил ${res.status} на ${path}`);
+  if (!res.ok) throw new EschoolError('api_error', `Щоденник відповів помилкою ${res.status}`);
   const text = await res.text();
   if (!text.trim()) return null;
   try { return JSON.parse(text); } catch { return null; }
@@ -178,11 +188,13 @@ export function appointmentsToTasks(appointments) {
   for (const a of appointments ?? []) {
     if (!a) continue;
     for (const h of a.Embed?.TargetHomeworks ?? []) {
-      if (!h || !(h.Description ?? '').trim()) continue;
+      if (!h) continue;
       tasks.set(String(h.Id), {
         id: String(h.Id),
         subject: (a.Subject ?? '').trim() || 'Без предмета',
-        text: h.Description.trim(),
+        // Текста может не быть (учитель приложил только файл или задал устно) —
+        // запись всё равно показываем: в дневнике на неё можно сдать ответ.
+        text: (h.Description ?? '').trim(),
         topic: (h.Topic ?? '').trim() || null,
         due: day(h.TargetAppointmentDate) ?? day(a.Date),
         assigned: day(h.AppointmentDate),
@@ -380,6 +392,48 @@ export async function getAnswer(session, homeworkId) {
   };
 }
 
+/** Адрес файла: как и сайт дневника, берём его через /fs на домене дневника. */
+export function fileUrl(raw) {
+  if (typeof raw !== 'string' || !raw) return null;
+  try {
+    const u = new URL(raw);
+    return `${DIARY}/fs${u.pathname}${u.search}`;
+  } catch {
+    return raw.startsWith('/fs') ? `${DIARY}${raw}` : `${DIARY}/fs${raw.startsWith('/') ? '' : '/'}${raw}`;
+  }
+}
+
+/**
+ * Открывает файл задания (учителя или свой) для скачивания: { name, mime, size, body }.
+ * Адрес берётся из самого задания в дневнике, а не из запроса приложения.
+ */
+export async function openFile(session, homeworkId, fileId) {
+  const hw = await api(session, homeworkPath(session, homeworkId), { embed: 'File' });
+  const file = (hw?.Embed?.Files ?? []).find((f) => f && f.Id === Number(fileId));
+  let target = fileUrl(file?.Url);
+  if (!target) throw new EschoolError('file_missing', 'Файл не знайдено');
+  let res;
+  for (let hop = 0; hop < 4; hop++) {
+    // cookie дневника отправляем только на его же домены
+    const own = /(^|\.)eschool-ua\.com$/.test(new URL(target).hostname);
+    res = await fetch(target, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(300000),
+      headers: { 'User-Agent': UA, ...(own ? { Cookie: cookieHeader(session.jar) } : {}) },
+    });
+    const next = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
+    if (!next) break;
+    target = new URL(next, target).href;
+  }
+  if (!res.ok || !res.body) throw new EschoolError('file_failed', `Щоденник не віддав файл (${res.status})`);
+  return {
+    name: clean(file.Name) ?? `file-${file.Id}`,
+    mime: clean(file.Mime) ?? res.headers.get('content-type') ?? 'application/octet-stream',
+    size: res.headers.get('content-length'),
+    body: res.body,
+  };
+}
+
 /** Прикрепляет файл ученика к заданию. file — File или Blob с именем. Возвращает id файла в дневнике. */
 export async function uploadAnswerFile(session, homeworkId, file, name) {
   const form = new FormData();
@@ -414,14 +468,23 @@ export async function submitAnswer(session, homeworkId, text) {
 
 /** Всё за период [from, to]: задания, расписание и оценки. Сайт запрашивает по неделе, делаем так же. */
 export async function fetchDiary(session, from, to) {
-  const all = [];
+  const weeks = [];
   for (let start = from; start <= to; start = addDays(start, 7)) {
-    const end = addDays(start, 6) < to ? addDays(start, 6) : to;
+    weeks.push({ start, end: addDays(start, 6) < to ? addDays(start, 6) : to });
+  }
+  const load = async ({ start, end }) => {
     const data = await api(session, `v1/${session.schoolId}/SchoolBoy/${session.schoolboyId}/Appointment`, {
       start, end, embed: EMBED, fileRole: 'schoolboy',
     });
-    all.push(...(data.Items ?? []));
-    await new Promise((r) => setTimeout(r, 200)); // не частим
+    return data?.Items ?? [];
+  };
+  // Первую неделю ждём отдельно: если токен пора продлить, это случится здесь, один раз.
+  // Остальные идут по три одновременно — весь год загружается в несколько раз быстрее.
+  const all = weeks.length ? [...await load(weeks[0])] : [];
+  for (let i = 1; i < weeks.length; i += 3) {
+    const batch = await Promise.all(weeks.slice(i, i + 3).map(load));
+    for (const items of batch) all.push(...items);
+    await new Promise((r) => setTimeout(r, 150)); // не частим
   }
   return {
     tasks: appointmentsToTasks(all), lessons: appointmentsToLessons(all), grades: appointmentsToGrades(all),

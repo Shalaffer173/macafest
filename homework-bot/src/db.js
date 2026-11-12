@@ -92,6 +92,13 @@ export function openDb(path) {
     db.exec('ALTER TABLE users ADD COLUMN year_start TEXT');
     db.exec('ALTER TABLE users ADD COLUMN semester2_start TEXT');
   }
+  // v0.4: поколение правил отбора заданий, скрытые предметы, вечерняя сводка
+  if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'task_rules')) {
+    db.exec('ALTER TABLE users ADD COLUMN task_rules INTEGER NOT NULL DEFAULT 1');
+    db.exec("ALTER TABLE users ADD COLUMN hidden_subjects TEXT NOT NULL DEFAULT '[]'"); // JSON-список предметов, скрытых в «Домашке»
+    db.exec('ALTER TABLE users ADD COLUMN digest INTEGER NOT NULL DEFAULT 1');          // присылать ли вечернюю сводку
+    db.exec('ALTER TABLE users ADD COLUMN digest_sent TEXT');                           // за какой день сводка уже отправлена
+  }
   // v0.1.3: задания, по которым ученик сдал ответ в дневнике, отмечаются сделанными
   if (!db.prepare('PRAGMA table_info(tasks)').all().some((c) => c.name === 'answered')) {
     db.exec('ALTER TABLE tasks ADD COLUMN answered INTEGER NOT NULL DEFAULT 0');
