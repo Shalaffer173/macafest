@@ -384,14 +384,18 @@ function renderAnswer() {
     checked: 'Вчитель уже перевірив роботу — змінити відповідь не можна.',
   }[d.status];
 
-  const send = el('button', { className: 'primary', textContent: d.answerId == null ? 'Надіслати в щоденник' : 'Зберегти зміни' });
-  const canSend = () => !a.busy && !locked && (a.text.trim() !== '' || d.files.length > 0 || a.pending.length > 0);
-  send.disabled = !canSend();
-  send.addEventListener('click', sendAnswer);
+  // Сохранить можно и пустой ответ, как в приложении «Єдиної Школи»: так задание отмечается сданным без текста и файлов.
+  const send = el('button', { className: 'primary', textContent: 'Зберегти', disabled: !!a.busy });
+  send.addEventListener('click', () => {
+    const nothing = a.text.trim() === '' && d.files.length === 0 && a.pending.length === 0;
+    // Первый пустой ответ переспрашиваем: случайное нажатие отметит задание сданным у учителя.
+    if (nothing && d.answerId == null && !confirm('Зберегти порожню відповідь? Учитель побачить, що завдання здано без тексту й файлів.')) return;
+    sendAnswer();
+  });
 
   const area = el('textarea', { value: a.text, placeholder: 'Напиши відповідь…', readOnly: locked, rows: 5 });
   area.setAttribute('aria-label', 'Моя відповідь');
-  area.addEventListener('input', () => { a.text = area.value; a.saved = false; send.disabled = !canSend(); });
+  area.addEventListener('input', () => { a.text = area.value; a.saved = false; });
 
   const picker = el('input', { type: 'file', multiple: true, hidden: true });
   picker.addEventListener('change', () => {

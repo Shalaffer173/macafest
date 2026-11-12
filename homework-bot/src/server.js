@@ -182,7 +182,7 @@ function fileName(req) {
 /** Ошибка дневника -> ответ приложению. */
 function answerFailed(res, tgId, e) {
   console.error(`[answer] ${tgId}: ${e.code ?? e.status ?? 'error'} ${e.message}`);
-  const status = e.status ?? { session_expired: 401, answer_locked: 409, answer_empty: 400, forbidden: 403 }[e.code] ?? 502;
+  const status = e.status ?? { session_expired: 401, answer_locked: 409, forbidden: 403 }[e.code] ?? 502;
   const message = e.message;
   return send(res, status, { error: message });
 }

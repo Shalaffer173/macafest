@@ -134,7 +134,6 @@ export async function submitAnswer(_session, id, text) {
   await pause(600);
   const a = answerOf(String(id));
   if (a.status === 'checked') throw Object.assign(new Error('Вчитель уже перевірив роботу — змінювати відповідь не можна'), { code: 'answer_locked' });
-  if (!String(text ?? '').trim() && !a.files.length) throw Object.assign(new Error('Напиши відповідь або додай файл'), { code: 'answer_empty' });
   Object.assign(a, { status: 'submitted', answerId: a.answerId ?? 3, text: String(text ?? '').trim(), submittedAt: new Date().toISOString() });
   return structuredClone(a);
 }

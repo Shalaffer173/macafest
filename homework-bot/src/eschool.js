@@ -456,7 +456,7 @@ export async function submitAnswer(session, homeworkId, text) {
   }
   const answer = String(text ?? '').trim();
   const Files = current.files.map((f) => ({ Id: f.id }));
-  if (!answer && !Files.length) throw new EschoolError('answer_empty', 'Напиши відповідь або додай файл');
+  // Пустой ответ (без текста и файлов) тоже отправляем: официальное приложение это позволяет.
   if (current.answerId == null) {
     const created = await api(session, homeworkPath(session, homeworkId, '/AssignAnswer'), null, { method: 'POST', json: { Answer: answer, Files } });
     if (!created || typeof created.Id !== 'number') throw new EschoolError('submit_failed', 'Щоденник не підтвердив, що відповідь збережено');

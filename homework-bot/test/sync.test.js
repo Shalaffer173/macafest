@@ -398,9 +398,11 @@ test('ответ на задание: запросы в том же формат
       ['GET', '/api/v1/4047/Homework/77/Answer', { schoolboyId: '1315', embed: 'File' }],
     ]);
 
-    // пустой ответ не отправляется
-    await assert.rejects(submitAnswer(session, '77', '   '), { code: 'answer_empty' });
-    assert.equal(last('/AssignAnswer'), undefined);
+    // пустой ответ тоже можно сохранить: так задание отмечается сданным без текста и файлов
+    const blank = await submitAnswer(session, '77', '   ');
+    assert.deepEqual(last('/AssignAnswer').json, { Answer: '', Files: [] });
+    assert.equal(blank.status, 'submitted');
+    answers = []; // дальше проверяем обычный путь с чистого листа
 
     // файл: multipart с полем upload-file
     assert.equal(await uploadAnswerFile(session, '77', new File(['abc'], 'my.jpg'), 'my.jpg'), 9);
