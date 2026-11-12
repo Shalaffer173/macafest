@@ -299,7 +299,7 @@ test('расписание и оценки: первая загрузка мол
   const text = describeDiff(second);
   assert.match(text, /Оцінка: Алгебра — 11 \(поточна\)/);
   assert.match(text, /Оцінку змінено: Алгебра — 9 → 10/);
-  assert.doesNotMatch(text, /Н/, 'о пропусках не сообщаем');
+  assert.match(text, /🚫 Пропуск: Алгебра за \d\d\.\d\d \(Н\)/);
   assert.deepEqual([count('lessons'), count('grades')], [3, 3]);
   assert.equal(db.prepare("SELECT status FROM lessons WHERE lesson_id = 'l2'").get().status, 'canceled');
 

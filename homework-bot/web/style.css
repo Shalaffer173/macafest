@@ -43,6 +43,7 @@ header { display: flex; align-items: center; justify-content: space-between; gap
 header .who { font-size: 13px; color: var(--muted); margin-top: 2px; }
 .icon-btn { border: 0; background: var(--card); color: var(--text); width: 40px; height: 40px; border-radius: 12px; font-size: 18px; cursor: pointer; flex: none; }
 .icon-btn { display: grid; place-items: center; padding: 0; }
+.arrows { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
 .spokes { width: 22px; height: 22px; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; }
 /* шесть шагов на оборот: лучи стоят на месте, по кругу бежит только яркость */
 .icon-btn.spin .spokes { animation: spokes 1s steps(6) infinite; }

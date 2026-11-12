@@ -198,10 +198,11 @@ export function describeDiff({ diff, first, grades, gradesSilent }) {
   for (const t of diff.changed) lines.push(`✏️ Змінено: ${t.subject} на ${fmt(t.due)}\n${cut(t.text)}`);
   for (const t of diff.removed) lines.push(`🗑 Прибрано: ${t.subject} на ${fmt(t.due)}`);
   if (grades && !gradesSilent) {
-    // Об отметках об отсутствии не пишем: их много, и это не оценка.
     const kind = (g) => (g.type ? ` (${g.type.toLowerCase()})` : '');
     for (const g of grades.added) {
-      if (g.kind !== 'missing') lines.push(`📊 Оцінка: ${g.subject} — ${g.label}${kind(g)} за ${fmt(g.date)}`);
+      lines.push(g.kind === 'missing'
+        ? `🚫 Пропуск: ${g.subject} за ${fmt(g.date)} (${g.label})`
+        : `📊 Оцінка: ${g.subject} — ${g.label}${kind(g)} за ${fmt(g.date)}`);
     }
     for (const g of grades.changed) {
       if (g.kind !== 'missing') lines.push(`📊 Оцінку змінено: ${g.subject} — ${g.oldLabel} → ${g.label}${kind(g)} за ${fmt(g.date)}`);

@@ -17,7 +17,7 @@ export const config = {
   secretKey: need('SECRET_KEY') || randomBytes(32).toString('hex'),
   port: Number(env.PORT || 8080),
   dbPath: env.DB_PATH || (DEMO ? ':memory:' : './data/bot.sqlite'),
-  syncMinutes: Math.max(10, Number(env.SYNC_MINUTES || 30)),
+  syncMinutes: Math.max(5, Number(env.SYNC_MINUTES || 10)), // как часто проверять дневник
   daysBack: 35, // сколько дней назад перечитывать, чтобы ловить задания задним числом
   fullSyncHours: 24, // как часто перечитывать весь учебный год с 1 сентября
   digestHour: Math.min(21, Math.max(6, Number(env.DIGEST_HOUR || 18))), // час вечерней сводки по Киеву

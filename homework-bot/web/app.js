@@ -687,10 +687,16 @@ function render() {
   if (!data?.loggedIn) return renderLogin(data?.error);
   const today = todayIso();
 
-  // Шесть лучей с убывающей яркостью; во время обновления яркость «бежит» по кругу шагами.
-  const refresh = el('button', { className: `icon-btn${busy || data.syncing ? ' spin' : ''}`, title: 'Оновити' },
-    svg('svg', { viewBox: '0 0 24 24', class: 'spokes', 'aria-hidden': 'true' },
-      ...[1, 0.82, 0.64, 0.46, 0.3, 0.16].map((opacity, i) => svg('line', { x1: 12, y1: 3, x2: 12, y2: 8.5, opacity, transform: `rotate(${-60 * i} 12 12)` }))));
+  // В покое — две стрелки по кругу; во время обновления — шесть лучей, по которым шагами бежит яркость.
+  const spinning = busy || data.syncing;
+  const icon = spinning
+    ? svg('svg', { viewBox: '0 0 24 24', class: 'spokes', 'aria-hidden': 'true' },
+      ...[1, 0.82, 0.64, 0.46, 0.3, 0.16].map((opacity, i) => svg('line', { x1: 12, y1: 3, x2: 12, y2: 8.5, opacity, transform: `rotate(${-60 * i} 12 12)` })))
+    : svg('svg', { viewBox: '0 0 24 24', class: 'arrows', 'aria-hidden': 'true' },
+      svg('polyline', { points: '23 4 23 10 17 10' }),
+      svg('polyline', { points: '1 20 1 14 7 14' }),
+      svg('path', { d: 'M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15' }));
+  const refresh = el('button', { className: `icon-btn${spinning ? ' spin' : ''}`, title: 'Оновити' }, icon);
   refresh.setAttribute('aria-label', 'Оновити');
   refresh.addEventListener('click', sync);
 
