@@ -138,12 +138,15 @@ function taskNode(t, today) {
         t.removed && el('span', { className: 'tag danger', textContent: 'прибрано вчителем' }),
         t.archived && el('span', { className: 'tag', textContent: 'до підключення бота' }),
         t.answered && el('span', { className: 'tag ok', textContent: 'відповідь здано' }),
+        t.undated && el('span', { className: 'tag warn', textContent: t.fromTopic ? 'з теми уроку, без дати' : 'дату не вказано' }),
+        t.undated && t.assigned && el('span', { textContent: `задано ${shortDate(t.assigned)}` }),
         t.backdated && el('span', { className: 'tag warn', textContent: 'додано заднім числом' }),
         t.changed && el('span', { className: 'tag warn', textContent: 'змінено' }),
         !t.done && !t.removed && !t.archived && t.due < today && el('span', { className: 'tag danger', textContent: 'прострочено' }),
         t.files > 0 && el('span', { textContent: `📎 ${t.files}` }),
         t.topic && el('span', { textContent: t.topic }))));
-  if (data.canAnswer && !t.removed) {
+  // Ответ можно сдать только на задание дневника; домашка из темы урока — просто текст учителя.
+  if (data.canAnswer && !t.removed && !t.fromTopic) {
     // Отдельная кнопка: нажатие на саму карточку по-прежнему ставит галочку.
     const act = el('button', { className: 'act', textContent: t.answered ? 'Моя відповідь ›' : 'Здати ›' });
     act.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openAnswer(t); });
@@ -199,6 +202,24 @@ function subjectFilter(hidden) {
   return [toggle, el('div', { className: 'subjects' }, ...chips), el('div', { className: 'subjects-actions' }, all, none)];
 }
 
+let query = ''; // строка поиска во вкладке «Домашка»
+
+/** Список заданий, сгруппированный по дням. desc — новые сверху. */
+function taskGroups(list, today, { overdue = false, desc = false } = {}) {
+  const groups = new Map();
+  for (const t of list) {
+    const key = overdue && t.due < today ? 'overdue' : t.due;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(t);
+  }
+  const keys = [...groups.keys()].sort((a, b) => (a === 'overdue' ? -1 : b === 'overdue' ? 1 : a < b ? -1 : 1));
+  if (desc) keys.reverse();
+  return keys.flatMap((k) => [
+    el('h2', { className: k === 'overdue' ? 'overdue' : '', textContent: k === 'overdue' ? 'Прострочено' : dayLabel(k, today) }),
+    el('ul', {}, ...groups.get(k).map((t) => taskNode(t, today))),
+  ]);
+}
+
 function renderHomework(today) {
   if (answering) return renderAnswer();
   // Прогресс считаем по текущей неделе и дальше, плюс всё несделанное из прошлого.
@@ -211,14 +232,34 @@ function renderHomework(today) {
   const pct = live.length ? Math.round((doneCount / live.length) * 100) : 0;
 
   const shown = visible.filter((t) => (filter === 'todo' ? !t.done && !t.removed && !t.archived : filter === 'done' ? t.done : true));
-  const groups = new Map();
-  for (const t of shown) {
-    const key = filter === 'todo' && t.due < today ? 'overdue' : t.due;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(t);
-  }
-  const keys = [...groups.keys()].sort((a, b) => (a === 'overdue' ? -1 : b === 'overdue' ? 1 : a < b ? -1 : 1));
-  if (filter !== 'todo') keys.reverse();
+  const normal = () => (shown.length
+    ? taskGroups(shown, today, { overdue: filter === 'todo', desc: filter !== 'todo' })
+    : [empty(hidden.size && !visible.length ? 'Усі предмети сховано' : filter === 'todo' ? '🎉 Усе зроблено' : 'Тут поки порожньо')]);
+
+  // Поиск идёт по всем заданиям — с архивом и скрытыми предметами — и перерисовывает
+  // только список, чтобы поле ввода не теряло фокус и клавиатура не пряталась.
+  const controls = el('div', {},
+    switcher('tabs', [['todo', 'Треба зробити'], ['done', 'Зроблено'], ['all', 'Усі']], filter, (id) => { filter = id; render(); }),
+    ...subjectFilter(hidden));
+  const list = el('div', {});
+  const fill = () => {
+    const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    controls.hidden = words.length > 0;
+    if (!words.length) { list.replaceChildren(...normal()); return; }
+    const found = data.tasks.filter((t) => {
+      const hay = `${t.subject} ${t.text} ${t.topic ?? ''}`.toLowerCase();
+      return words.every((w) => hay.includes(w));
+    });
+    list.replaceChildren(
+      el('p', { className: 'muted found', textContent: found.length
+        ? `Знайдено ${found.length} — серед усіх завдань, разом з архівом і схованими предметами`
+        : 'Нічого не знайдено' }),
+      ...taskGroups(found, today, { desc: true }));
+  };
+  const search = el('input', { type: 'search', className: 'search', value: query, placeholder: 'Пошук: «§ 12», «контрольна», «фізика»…' });
+  search.setAttribute('aria-label', 'Пошук по завданнях');
+  search.addEventListener('input', () => { query = search.value; fill(); });
+  fill();
 
   return [
     data.syncing && !data.tasks.length && el('p', { className: 'muted', textContent: 'Завантажую завдання зі щоденника…' }),
@@ -227,14 +268,9 @@ function renderHomework(today) {
         el('span', {}, 'Зроблено ', el('b', { textContent: `${doneCount} з ${live.length}` })),
         el('span', { className: 'muted', textContent: `залишилось ${live.length - doneCount}` })),
       el('div', { className: 'bar' }, el('i', { style: `width:${pct}%` }))),
-    switcher('tabs', [['todo', 'Треба зробити'], ['done', 'Зроблено'], ['all', 'Усі']], filter, (id) => { filter = id; render(); }),
-    ...subjectFilter(hidden),
-    ...(keys.length
-      ? keys.flatMap((k) => [
-          el('h2', { className: k === 'overdue' ? 'overdue' : '', textContent: k === 'overdue' ? 'Прострочено' : dayLabel(k, today) }),
-          el('ul', {}, ...groups.get(k).map((t) => taskNode(t, today))),
-        ])
-      : [empty(hidden.size && !visible.length ? 'Усі предмети сховано' : filter === 'todo' ? '🎉 Усе зроблено' : 'Тут поки порожньо')]),
+    search,
+    controls,
+    list,
     data.tasks.length > 0 && el('p', { className: 'muted center', textContent:
       `Усього завдань: ${data.tasks.length}, найстаріше від ${shortDate(data.tasks[0].due)}. В архіві: ${data.tasks.filter((t) => t.archived).length}` }),
   ];
@@ -367,7 +403,10 @@ function renderAnswer() {
   const head = [
     back,
     el('h2', { className: 'title', textContent: t.subject }),
-    el('p', { className: 'muted due', textContent: [`На ${shortDate(t.due)}`, t.topic].filter(Boolean).join(' · ') }),
+    el('p', { className: 'muted due', textContent: [
+      t.undated ? `Дату не вказано, найближчий урок — ${shortDate(t.due)}` : `На ${shortDate(t.due)}`,
+      t.undated && t.assigned && `задано ${shortDate(t.assigned)}`,
+      t.topic].filter(Boolean).join(' · ') }),
     el('div', { className: `card tasktext${t.text ? '' : ' none'}` }, t.text ? linkified(t.text) : 'Без тексту завдання'),
   ];
   if (!d) {
@@ -636,6 +675,72 @@ function renderSubject(name, today) {
   ];
 }
 
+/**
+ * Тренд за семестр, как на сайте дневника: средний балл второй половины текущих оценок против первой.
+ * Нужно хотя бы 4 оценки в разные дни; разница от 0,2 балла — «растёт» или «падает».
+ */
+function trend(list) {
+  const pts = list.filter((g) => g.kind === 'current' && g.value != null).slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  if (pts.length < 4 || new Set(pts.map((g) => g.date)).size < 2) return null;
+  const half = Math.floor(pts.length / 2);
+  const avg = (xs) => xs.reduce((sum, g) => sum + g.value, 0) / xs.length;
+  const d = avg(pts.slice(-half)) - avg(pts.slice(0, half));
+  return d >= 0.2 ? 'up' : d <= -0.2 ? 'down' : null;
+}
+const trendMark = (t) => t && el('span', { className: `trend ${t}`, textContent: t === 'up' ? '↑ ' : '↓ ', title: t === 'up' ? 'Бал росте' : 'Бал падає' });
+
+/** Вид итоговой оценки по её типу в дневнике: тематическая, I/II семестр, годовая или другая. */
+function finalKind(g) {
+  if (g.kind !== 'summary') return null;
+  const raw = (g.type ?? '').toLowerCase();
+  if (/річн|(^|\s)рік(\s|$)/.test(raw)) return 'year';
+  if (/семестр/.test(raw)) {
+    const roman = raw.replace(/і/g, 'i'); // кириллическая «і» в римских цифрах
+    if (/(^|[^a-z])ii([^a-z]|$)/.test(roman) || /2/.test(raw)) return 'sem2';
+    if (/(^|[^a-z])i([^a-z]|$)/.test(roman) || /1/.test(raw)) return 'sem1';
+    return semesterOf(g.date) === 2 ? 'sem2' : 'sem1';
+  }
+  return /темат/.test(raw) ? 'thematic' : 'other';
+}
+
+let reportCard = false; // открыт ли табель во вкладке «Оцінки»
+
+function renderReportCard(today) {
+  const grades = data.grades ?? [];
+  const back = el('button', { className: 'back', textContent: '‹ Оцінки' });
+  back.addEventListener('click', () => { reportCard = false; render(); });
+  const semester = semesterOf(today);
+  const subjects = [...new Set(grades.map((g) => g.subject))].sort((a, b) => a.localeCompare(b, 'uk'));
+  let anyFinal = false;
+  const cards = subjects.map((name) => {
+    const list = grades.filter((g) => g.subject === name); // от новых к старым
+    const latest = (kind) => list.find((g) => finalKind(g) === kind) ?? null;
+    const finals = { sem1: latest('sem1'), sem2: latest('sem2'), year: latest('year') };
+    if (finals.sem1 || finals.sem2 || finals.year) anyFinal = true;
+    const thematic = list.filter((g) => ['thematic', 'other'].includes(finalKind(g))).reverse();
+    const expected = average(list.filter((g) => semesterOf(g.date) === semester));
+    const cell = (label, g, hint) => el('div', { className: 'rc-cell' },
+      el('div', { className: 'label', textContent: label }),
+      g ? chip(g) : el('div', { className: hint ? 'rc-hint' : 'rc-none', textContent: hint ?? '—' }));
+    return el('li', { className: 'card' },
+      el('div', { className: 'subject', textContent: name }),
+      el('div', { className: 'rc-row' },
+        cell('Очікувана', null, fmt1(expected)),
+        cell('І семестр', finals.sem1),
+        cell('ІІ семестр', finals.sem2),
+        cell('Рік', finals.year)),
+      thematic.length > 0 && el('div', { className: 'rc-them' },
+        el('span', { className: 'label', textContent: 'Тематичні:' }), ...thematic.map(chip)));
+  });
+  return [
+    back,
+    el('h2', { className: 'title', textContent: 'Табель' }),
+    !anyFinal && el('p', { className: 'muted legend', textContent:
+      'Семестрових і річних оцінок ще немає — вони з’являться тут, коли їх виставлять у щоденник. «Очікувана» — середній бал поточних оцінок за цей семестр.' }),
+    el('ul', { className: 'rc' }, ...cards),
+  ];
+}
+
 function renderGrades(today) {
   const grades = data.grades ?? [];
   if (!grades.length) {
@@ -643,15 +748,23 @@ function renderGrades(today) {
   }
   if (subject && grades.some((g) => g.subject === subject)) return renderSubject(subject, today);
   subject = null;
+  if (reportCard) return renderReportCard(today);
 
   const missed = grades.filter((g) => g.kind === 'missing');
   const marks = grades.filter((g) => g.kind !== 'missing'); // сервер отдаёт от новых к старым
   const semester = semesterOf(today);
   const rows = [...new Set(grades.map((g) => g.subject))]
-    .map((name) => ({ name, expected: average(grades.filter((g) => g.subject === name && semesterOf(g.date) === semester)) }))
+    .map((name) => {
+      const inSemester = grades.filter((g) => g.subject === name && semesterOf(g.date) === semester);
+      return { name, expected: average(inSemester), trend: trend(inSemester) };
+    })
     .sort((a, b) => (b.expected ?? -1) - (a.expected ?? -1) || a.name.localeCompare(b.name, 'uk'));
 
+  const card = el('button', { className: 'linkrow', textContent: '📄 Табель' }, el('span', { className: 'go', textContent: '›' }));
+  card.addEventListener('click', () => { reportCard = true; window.scrollTo(0, 0); render(); });
+
   return [
+    card,
     el('div', { className: 'tiles' },
       tile(String(missed.length), 'Пропусків за рік'),
       tile(String(missed.filter((g) => g.date.startsWith(today.slice(0, 7))).length), 'Пропусків за місяць')),
@@ -660,10 +773,11 @@ function renderGrades(today) {
     el('ul', {}, ...rows.map((r) => {
       const open = el('button', { className: 'meter' },
         el('span', { className: 'name', textContent: r.name }),
-        el('span', { className: 'fig', textContent: fmt1(r.expected) }),
+        el('span', { className: 'fig' }, trendMark(r.trend), fmt1(r.expected)),
         el('span', { className: 'go', textContent: '›' }),
         el('span', { className: 'track' }, el('i', { style: `width:${r.expected == null ? 0 : (r.expected / 12) * 100}%` })));
-      open.setAttribute('aria-label', r.expected == null ? `${r.name}: оцінок немає` : `${r.name}: ${fmt1(r.expected)} з 12`);
+      open.setAttribute('aria-label', r.expected == null ? `${r.name}: оцінок немає`
+        : `${r.name}: ${fmt1(r.expected)} з 12${r.trend === 'up' ? ', росте' : r.trend === 'down' ? ', падає' : ''}`);
       open.addEventListener('click', () => { subject = r.name; window.scrollTo(0, 0); render(); });
       return el('li', {}, open);
     })),
@@ -678,6 +792,55 @@ function renderGrades(today) {
           g.type && el('span', { textContent: g.type }),
           g.topic && el('span', { textContent: g.topic })),
         g.comment && el('div', { className: 'note', textContent: `«${g.comment}»` }))))),
+  ];
+}
+
+// ---------- настройки уведомлений ----------
+
+let settingsOpen = false;
+let settingsSaved = null; // какую настройку только что сохранили
+
+function hourSelect(key, from, to, label) {
+  const sel = el('select', {}, el('option', { value: '', textContent: 'Вимкнено' }),
+    ...Array.from({ length: to - from + 1 }, (_, i) => el('option', { value: String(from + i), textContent: `${from + i}:00` })));
+  sel.value = data[key] == null ? '' : String(data[key]);
+  sel.setAttribute('aria-label', label);
+  sel.addEventListener('change', async () => {
+    const value = sel.value === '' ? null : Number(sel.value);
+    try {
+      const res = await api('/api/prefs', { [key]: value });
+      data.digestHour = res.digestHour;
+      data.morningHour = res.morningHour;
+      settingsSaved = key;
+    } catch (e) {
+      settingsSaved = null;
+      alert(e.message);
+    }
+    render();
+  });
+  return sel;
+}
+
+function renderSettings() {
+  const back = el('button', { className: 'back', textContent: '‹ Назад' });
+  back.addEventListener('click', () => { settingsOpen = false; settingsSaved = null; render(); });
+  const row = (key, title, hint, from, to) => el('label', { className: 'setting' },
+    el('span', { className: 'title', textContent: title }),
+    el('span', { className: 'muted', textContent: hint }),
+    hourSelect(key, from, to, title),
+    settingsSaved === key && el('span', { className: 'saved', textContent: '✓ Збережено' }));
+  return [
+    back,
+    el('h2', { className: 'title', textContent: 'Сповіщення в чаті' }),
+    row('digestHour', 'Вечірнє зведення', 'Що задано на наступний навчальний день і ще не зроблено.', 14, 22),
+    row('morningHour', 'Ранкове нагадування', 'Що треба здати сьогодні й ще не зроблено, і перший урок.', 5, 11),
+    el('p', { className: 'muted legend', textContent: 'Час київський. Якщо все зроблено, бот нічого не пише. '
+      + 'Про нові завдання, оцінки, пропуски й зміни в розкладі він повідомляє одразу, щойно їх помітить.' }),
+    el('h2', { textContent: 'Команди в чаті' }),
+    el('ul', { className: 'rows commands' },
+      ...[['/now', 'який урок зараз і скільки до дзвінка'], ['/bells', 'розклад дзвінків'], ['/today', 'розклад на сьогодні'],
+        ['/tomorrow', 'на наступний навчальний день'], ['/delete', 'стерти всі мої дані']]
+        .map(([c, d]) => el('li', {}, el('b', { textContent: c }), ` — ${d}`))),
   ];
 }
 
@@ -700,6 +863,8 @@ function render() {
   refresh.setAttribute('aria-label', 'Оновити');
   refresh.addEventListener('click', sync);
 
+  const settings = !settingsOpen && el('button', { className: 'linkrow', textContent: '🔔 Сповіщення в чаті' }, el('span', { className: 'go', textContent: '›' }));
+  if (settings) settings.addEventListener('click', () => { settingsOpen = true; settingsSaved = null; window.scrollTo(0, 0); render(); });
   const logout = el('button', { className: 'link', textContent: 'Вийти і стерти мої дані' });
   logout.addEventListener('click', async () => {
     if (!confirm('Стерти токен, завдання, розклад і оцінки?')) return;
@@ -708,9 +873,10 @@ function render() {
     render();
   });
 
-  const body = view === 'schedule' ? renderSchedule(today) : view === 'grades' ? renderGrades(today) : renderHomework(today);
+  const body = settingsOpen ? renderSettings()
+    : view === 'schedule' ? renderSchedule(today) : view === 'grades' ? renderGrades(today) : renderHomework(today);
   // Системная кнопка «назад» в Telegram возвращает со страницы предмета или ответа к списку.
-  if ((view === 'grades' && subject) || (view === 'homework' && answering)) tg?.BackButton?.show?.(); else tg?.BackButton?.hide?.();
+  if (settingsOpen || (view === 'grades' && (subject || reportCard)) || (view === 'homework' && answering)) tg?.BackButton?.show?.(); else tg?.BackButton?.hide?.();
 
   app.replaceChildren(...[
     el('header', {},
@@ -723,12 +889,15 @@ function render() {
       view = id;
       subject = null;
       answering = null;
+      reportCard = false;
+      settingsOpen = false;
       remember('view', id);
       scrollToToday = id === 'schedule';
       window.scrollTo(0, 0);
       render();
     }),
     ...body,
+    settings,
     data.lastSync && el('p', { className: 'muted center', textContent: `Оновлено ${new Date(data.lastSync).toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` }),
     logout].filter(Boolean));
 
@@ -769,7 +938,13 @@ async function watchSync() {
   watching = false;
 }
 
-tg?.BackButton?.onClick?.(() => { if (answering) answering = null; else subject = null; render(); });
+tg?.BackButton?.onClick?.(() => {
+  if (settingsOpen) settingsOpen = false;
+  else if (answering) answering = null;
+  else if (reportCard) reportCard = false;
+  else subject = null;
+  render();
+});
 
 try {
   data = await api('/api/state');

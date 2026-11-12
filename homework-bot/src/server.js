@@ -4,11 +4,11 @@ import { Readable } from 'node:stream';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
-import { openDb } from './db.js';
+import { openDb, backupDatabase } from './db.js';
 import { encrypt, decrypt, verifyInitData, signToken, verifyToken } from './crypto.js';
 import { syncUser, describeDiff } from './sync.js';
 import { createBot } from './telegram.js';
-import { kyivNow, nextSchoolDay, scheduleText, digestText } from './digest.js';
+import { kyivNow, nextSchoolDay, scheduleText, digestText, nowText, bellsText, morningText } from './digest.js';
 import * as eschool from './eschool.js';
 import * as demo from './demo.js';
 
@@ -29,6 +29,28 @@ function noteVisitor(from) {
     ON CONFLICT(tg_id) DO UPDATE SET name = excluded.name, username = excluded.username, last_at = excluded.last_at, messages = messages + 1`)
     .run(from.id, [from.first_name, from.last_name].filter(Boolean).join(' ') || null, from.username ?? null, now, now);
 }
+// Время сводок (час по Киеву). Вечерняя по умолчанию включена в час из настроек сервера,
+// утренняя по умолчанию выключена.
+const EVENING = [14, 22], MORNING = [5, 11];
+function notifyPrefs(tgId) {
+  const u = db.prepare('SELECT digest, digest_hour, morning_hour FROM users WHERE tg_id = ?').get(tgId);
+  return { digestHour: u?.digest ? u.digest_hour ?? config.digestHour : null, morningHour: u?.morning_hour ?? null };
+}
+/** Разбирает «19», «19:00», «off»/«вимк». Возвращает час, null (выключить) или undefined (не понял). */
+function parseHour(arg, [lo, hi]) {
+  const a = String(arg ?? '').trim().toLowerCase();
+  if (['off', 'вимк', 'вимкнути', 'ні', '0'].includes(a)) return null;
+  const m = /^(\d{1,2})(?::00)?$/.exec(a);
+  const h = m ? Number(m[1]) : NaN;
+  return h >= lo && h <= hi ? h : undefined;
+}
+function setDigest(tgId, hour) {
+  db.prepare('UPDATE users SET digest = ?, digest_hour = COALESCE(?, digest_hour) WHERE tg_id = ?').run(hour == null ? 0 : 1, hour, tgId);
+}
+function setMorning(tgId, hour) {
+  db.prepare('UPDATE users SET morning_hour = ? WHERE tg_id = ?').run(hour, tgId);
+}
+
 const loggedIn = (tgId) => !!db.prepare('SELECT 1 FROM users WHERE tg_id = ? AND session IS NOT NULL').get(tgId);
 const needLogin = { text: 'Спершу увійди в щоденник: відкрий застосунок кнопкою нижче.', button: true };
 
@@ -50,15 +72,41 @@ const commands = {
       return { text: scheduleText(db, tgId, nextSchoolDay(db, tgId, today), today) };
     },
   },
+  '/now': {
+    description: 'який урок зараз і що далі',
+    run: async (tgId) => (loggedIn(tgId) ? { text: nowText(db, tgId, kyivNow()) } : needLogin),
+  },
+  '/bells': {
+    description: 'розклад дзвінків',
+    run: async (tgId) => (loggedIn(tgId) ? { text: bellsText(db, tgId, kyivNow().date) } : needLogin),
+  },
   '/digest': {
-    description: 'увімкнути або вимкнути вечірнє зведення',
-    run: async (tgId) => {
+    description: 'вечірнє зведення: /digest 19 або /digest off',
+    run: async (tgId, args) => {
       if (!loggedIn(tgId)) return needLogin;
-      const on = !db.prepare('SELECT digest FROM users WHERE tg_id = ?').get(tgId).digest;
-      db.prepare('UPDATE users SET digest = ? WHERE tg_id = ?').run(on ? 1 : 0, tgId);
-      return { text: on
-        ? `Вечірнє зведення увімкнено: щодня о ${config.digestHour}:00 напишу, що задано на наступний день і ще не зроблено.`
-        : 'Вечірнє зведення вимкнено. Увімкнути знову: /digest' };
+      let hour = parseHour(args, EVENING);
+      if (!args) { // без аргумента — перемикач; при включении возвращаем прежний час
+        const row = db.prepare('SELECT digest, digest_hour FROM users WHERE tg_id = ?').get(tgId);
+        hour = row.digest ? null : row.digest_hour ?? config.digestHour;
+      }
+      if (hour === undefined) return { text: `Вкажи годину від ${EVENING[0]} до ${EVENING[1]}, наприклад /digest 19, або /digest off.` };
+      setDigest(tgId, hour);
+      return { text: hour == null
+        ? 'Вечірнє зведення вимкнено. Увімкнути знову: /digest або /digest 19'
+        : `Вечірнє зведення увімкнено: щодня о ${hour}:00 напишу, що задано на наступний навчальний день і ще не зроблено.` };
+    },
+  },
+  '/morning': {
+    description: 'ранкове нагадування: /morning 7 або /morning off',
+    run: async (tgId, args) => {
+      if (!loggedIn(tgId)) return needLogin;
+      let hour = parseHour(args, MORNING);
+      if (!args) hour = notifyPrefs(tgId).morningHour == null ? 7 : null;
+      if (hour === undefined) return { text: `Вкажи годину від ${MORNING[0]} до ${MORNING[1]}, наприклад /morning 7, або /morning off.` };
+      setMorning(tgId, hour);
+      return { text: hour == null
+        ? 'Ранкове нагадування вимкнено. Увімкнути: /morning 7'
+        : `Ранкове нагадування увімкнено: щодня о ${hour}:00 напишу, що треба здати сьогодні й ще не зроблено.` };
     },
   },
   '/delete': {
@@ -127,10 +175,11 @@ async function runSync(tgId, { notify }) {
       console.log(`[sync] ${tgId}: первый быстрый проход готов, загружаю весь год`);
     }
     const result = await withSession(tgId, (session) => syncUser(db, provider, tgId, session, config));
-    console.log(`[sync] ${tgId}: ${result.from}..${result.to}, заданий ${result.fetched}, с ответом ${result.answered}, новых ${result.diff.added.length}; уроков ${result.lessons}, оценок ${result.gradesTotal}, новых оценок ${result.grades.added.length}`);
+    console.log(`[sync] ${tgId}: ${result.from}..${result.to}, заданий ${result.fetched}, с ответом ${result.answered}, новых ${result.diff.added.length}; уроков ${result.lessons}, оценок ${result.gradesTotal}, новых оценок ${result.grades.added.length}, изменений в расписании ${result.schedule.length}`);
     if (result.full && result.debug) {
       // Сводка без личных данных: помогает сверять число пропусков с официальным приложением.
       console.log(`[sync] ${tgId}: весь год с ${result.from}, уроков в ответе ${result.debug.appointments}, пропуски ${JSON.stringify(result.debug.missing)}`);
+      console.log(`[sync] ${tgId}: без дати ${JSON.stringify(result.debug.undated)}, вкладення Homework: ${result.debug.embedHomework}`);
     }
     const text = notify && describeDiff(result);
     if (text && bot) await bot.send(tgId, text, true);
@@ -232,9 +281,10 @@ function state(tgId) {
     const login = logins.get(tgId);
     return { loggedIn: false, loggingIn: !!login?.pending, error: login?.error ?? u?.sync_error ?? null };
   }
-  const tasks = db.prepare(`SELECT task_id AS id, subject, text, topic, due, assigned, files, done, backdated, changed, removed, archived, answered
+  const tasks = db.prepare(`SELECT task_id AS id, subject, text, topic, due, assigned, files, done, backdated, changed, removed, archived, answered, undated
     FROM tasks WHERE tg_id = ? ORDER BY due, subject`).all(tgId)
-    .map((t) => ({ ...t, done: !!t.done, backdated: !!t.backdated, changed: !!t.changed, removed: !!t.removed, archived: !!t.archived, answered: !!t.answered }));
+    .map((t) => ({ ...t, done: !!t.done, backdated: !!t.backdated, changed: !!t.changed, removed: !!t.removed, archived: !!t.archived, answered: !!t.answered, undated: !!t.undated,
+      fromTopic: !/^\d+$/.test(t.id) })); // домашка из темы урока: сдать ответ на неё нельзя
   const lessons = db.prepare(`SELECT lesson_id AS id, date, number, start, duration, subject, room, teacher, topic, status, reason
     FROM lessons WHERE tg_id = ? AND date >= ? ORDER BY date, number, start`).all(tgId, scheduleFrom());
   const grades = db.prepare(`SELECT grade_id AS id, subject, date, label, value, kind, type, topic, comment
@@ -245,6 +295,7 @@ function state(tgId) {
     semester2Start: u.semester2_start ?? null, // с какой даты идёт второй семестр, если дневник это сообщил
     canAnswer: typeof provider.submitAnswer === 'function',
     hiddenSubjects: parseList(u.hidden_subjects), // предметы, скрытые во вкладке «Домашка»
+    ...notifyPrefs(tgId), // час вечерней сводки и утреннего напоминания (null — выключено)
   };
 }
 
@@ -298,13 +349,25 @@ async function handleApi(req, res, path) {
   }
 
   if (req.method === 'POST' && path === '/api/prefs') {
-    const { hiddenSubjects } = await readJson(req);
-    if (!Array.isArray(hiddenSubjects) || hiddenSubjects.length > 100 || hiddenSubjects.some((x) => typeof x !== 'string' || x.length > 200)) {
-      return send(res, 400, { error: 'Некоректний список предметів' });
+    // Частичное обновление: приходят только те настройки, которые поменялись.
+    const body = await readJson(req);
+    if (!loggedIn(tgId)) return send(res, 401, { error: 'Потрібно увійти' });
+    if ('hiddenSubjects' in body) {
+      const list = body.hiddenSubjects;
+      if (!Array.isArray(list) || list.length > 100 || list.some((x) => typeof x !== 'string' || x.length > 200)) {
+        return send(res, 400, { error: 'Некоректний список предметів' });
+      }
+      db.prepare('UPDATE users SET hidden_subjects = ? WHERE tg_id = ?').run(JSON.stringify([...new Set(list)]), tgId);
     }
-    const r = db.prepare('UPDATE users SET hidden_subjects = ? WHERE tg_id = ?').run(JSON.stringify([...new Set(hiddenSubjects)]), tgId);
-    return r.changes ? send(res, 200, { ok: true }) : send(res, 401, { error: 'Потрібно увійти' });
+    for (const [key, range, apply] of [['digestHour', EVENING, setDigest], ['morningHour', MORNING, setMorning]]) {
+      if (!(key in body)) continue;
+      const v = body[key];
+      if (v !== null && !(Number.isInteger(v) && v >= range[0] && v <= range[1])) return send(res, 400, { error: 'Некоректний час' });
+      apply(tgId, v);
+    }
+    return send(res, 200, { ok: true, ...notifyPrefs(tgId) });
   }
+
 
   if (req.method === 'POST' && path === '/api/sync') {
     startSync(tgId);
@@ -437,17 +500,38 @@ async function syncAll() {
   }
 }
 setInterval(() => { syncAll().catch((e) => console.error('[sync]', e.message)); }, config.syncMinutes * 60_000).unref?.();
-// Вечерняя сводка: раз в несколько минут проверяем, не пора ли, и каждому пишем не чаще раза в день.
+// Вечерняя сводка и утреннее напоминание: каждые две минуты смотрим, кому пора, и пишем каждому
+// не чаще раза в день. Если бот был выключен в нужный час, напишет, когда включится (но не позже 23:00 и 12:00).
 async function sendDigests() {
   const now = kyivNow();
-  if (now.minutes < config.digestHour * 60 || now.minutes >= 22 * 60) return;
-  const users = db.prepare('SELECT tg_id FROM users WHERE session IS NOT NULL AND digest = 1 AND (digest_sent IS NULL OR digest_sent < ?)').all(now.date);
-  for (const { tg_id: tgId } of users) {
-    db.prepare('UPDATE users SET digest_sent = ? WHERE tg_id = ?').run(now.date, tgId);
-    const text = digestText(db, tgId, now.date);
-    if (text && bot) await bot.send(tgId, text, true);
+  const users = db.prepare(`SELECT tg_id, digest, digest_hour, digest_sent, morning_hour, morning_sent
+    FROM users WHERE session IS NOT NULL`).all();
+  for (const u of users) {
+    const evening = u.digest_hour ?? config.digestHour;
+    if (u.digest && now.minutes >= evening * 60 && now.minutes < 23 * 60 && (u.digest_sent ?? '') < now.date) {
+      db.prepare('UPDATE users SET digest_sent = ? WHERE tg_id = ?').run(now.date, u.tg_id);
+      const text = digestText(db, u.tg_id, now.date);
+      if (text && bot) await bot.send(u.tg_id, text, true);
+    }
+    if (u.morning_hour != null && now.minutes >= u.morning_hour * 60 && now.minutes < 12 * 60 && (u.morning_sent ?? '') < now.date) {
+      db.prepare('UPDATE users SET morning_sent = ? WHERE tg_id = ?').run(now.date, u.tg_id);
+      const text = morningText(db, u.tg_id, now.date);
+      if (text && bot) await bot.send(u.tg_id, text, true);
+    }
   }
 }
-setInterval(() => { sendDigests().catch((e) => console.error('[digest]', e.message)); }, 5 * 60_000).unref?.();
+setInterval(() => { sendDigests().catch((e) => console.error('[digest]', e.message)); }, 2 * 60_000).unref?.();
+
+// Резервная копия базы раз в день (проверяем каждый час и через минуту после запуска).
+function backup() {
+  try {
+    const file = backupDatabase(db, config.dbPath, kyivNow().date);
+    if (file) console.log(`[backup] копия базы: ${file}`);
+  } catch (e) {
+    console.error('[backup]', e.message);
+  }
+}
+setTimeout(backup, 60_000).unref?.();
+setInterval(backup, 60 * 60_000).unref?.();
 
 if (bot) bot.poll();

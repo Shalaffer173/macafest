@@ -182,30 +182,107 @@ async function api(session, path, params, opts = {}) {
 const getProfile = (session) => api(session, 'profile');
 const day = (s) => (typeof s === 'string' ? s.slice(0, 10) : null);
 
+const normText = (s) => String(s ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+const LESSON_OFF = (a) => a.Canceled === true || a.ReplacementId > 0; // урок отменён или заменён другим
+
+/**
+ * Даты уроков по предметам (без отменённых), чтобы найти «следующий урок».
+ * Учитель может создать задание «Без дати (напр. останній урок)» — без урока, к которому оно задано.
+ * Тогда по смыслу это задание на следующий урок того же предмета.
+ */
+function lessonDatesBySubject(appointments) {
+  const by = new Map();
+  for (const a of appointments ?? []) {
+    const date = day(a?.Date);
+    if (!a || !date || LESSON_OFF(a)) continue;
+    const subject = (a.Subject ?? '').trim() || 'Без предмета';
+    if (!by.has(subject)) by.set(subject, new Set());
+    by.get(subject).add(date);
+  }
+  return new Map([...by].map(([k, v]) => [k, [...v].sort()]));
+}
+function nextLessonDate(dates, after) {
+  return (dates ?? []).find((d) => d > after) ?? null;
+}
+
 /** Уроки из ответа дневника -> плоский список заданий. */
 export function appointmentsToTasks(appointments) {
+  const lessonsBy = lessonDatesBySubject(appointments);
+  // Дата, к которой задание без даты стоит выполнить: следующий урок предмета, а если его
+  // в загруженном периоде нет — через неделю после того урока, на котором задание дали.
+  const dueFor = (subject, assigned) => nextLessonDate(lessonsBy.get(subject), assigned) ?? addDays(assigned, 7);
+
   const tasks = new Map();
   for (const a of appointments ?? []) {
     if (!a) continue;
-    for (const h of a.Embed?.TargetHomeworks ?? []) {
-      if (!h) continue;
-      tasks.set(String(h.Id), {
-        id: String(h.Id),
-        subject: (a.Subject ?? '').trim() || 'Без предмета',
-        // Текста может не быть (учитель приложил только файл или задал устно) —
-        // запись всё равно показываем: в дневнике на неё можно сдать ответ.
-        text: (h.Description ?? '').trim(),
-        topic: (h.Topic ?? '').trim() || null,
-        due: day(h.TargetAppointmentDate) ?? day(a.Date),
-        assigned: day(h.AppointmentDate),
-        files: h.FilesCount ?? 0,
-        // Ученик сдал ответ: текстом (HaveAnswer) или файлами. FilesCount при fileRole=schoolboy
-        // считает файлы ученика, а не учителя — проверено на настоящем аккаунте.
-        answered: h.HaveAnswer === true || (h.FilesCount ?? 0) > 0,
+    const subject = (a.Subject ?? '').trim() || 'Без предмета';
+    // TargetHomeworks — задания, заданные НА этот урок. Homeworks — заданные НА ЭТОМ уроке
+    // (приходят, только если дневник поддерживает такое вложение); в них бывают и задания без даты.
+    const lists = [[a.Embed?.TargetHomeworks, false], [a.Embed?.Homeworks, true]];
+    for (const [list, givenHere] of lists) {
+      for (const h of list ?? []) {
+        if (!h || tasks.has(String(h.Id))) continue;
+        const target = day(h.TargetAppointmentDate);
+        const assigned = day(h.AppointmentDate) ?? (givenHere || !target ? day(a.Date) : null);
+        const undated = !target;
+        const due = target ?? (assigned ? dueFor(subject, assigned) : null);
+        if (!due) continue;
+        tasks.set(String(h.Id), {
+          id: String(h.Id),
+          subject,
+          // Текста может не быть (учитель приложил только файл или задал устно) —
+          // запись всё равно показываем: в дневнике на неё можно сдать ответ.
+          text: (h.Description ?? '').trim(),
+          topic: (h.Topic ?? '').trim() || null,
+          due,
+          assigned,
+          files: h.FilesCount ?? 0,
+          // Ученик сдал ответ: текстом (HaveAnswer) или файлами. FilesCount при fileRole=schoolboy
+          // считает файлы ученика, а не учителя — проверено на настоящем аккаунте.
+          answered: h.HaveAnswer === true || (h.FilesCount ?? 0) > 0,
+          undated,
+        });
+      }
+    }
+  }
+
+  // Домашка, записанная прямо в теме урока (поле «Домашнє завдання» календарного плана).
+  // Это не отдельное задание дневника: ответ на него сдать нельзя, поэтому id не числовой.
+  // Берём её, только если на том же уроке нет настоящего задания с тем же смыслом.
+  const real = [...tasks.values()];
+  for (const a of appointments ?? []) {
+    const date = day(a?.Date);
+    if (!a || !date || LESSON_OFF(a)) continue;
+    const subject = (a.Subject ?? '').trim() || 'Без предмета';
+    for (const topic of a.Embed?.Topics ?? []) {
+      const text = (topic?.Homework ?? '').trim();
+      if (!text) continue;
+      const duplicate = real.some((t) => t.subject === subject && (t.assigned === date || normText(t.text) === normText(text)));
+      if (duplicate) continue;
+      const id = `p${a.Id}-${topic.Id}`;
+      if (tasks.has(id)) continue;
+      tasks.set(id, {
+        id, subject, text,
+        topic: (topic.Title ?? '').trim() || null,
+        due: dueFor(subject, date),
+        assigned: date,
+        files: 0,
+        answered: false,
+        undated: true,
+        fromTopic: true,
       });
     }
   }
   return mergeDuplicates([...tasks.values()].filter((t) => t.due));
+}
+
+/** Сначала числовые id дневника по возрастанию, потом составные (домашка из темы урока). */
+function byId(a, b) {
+  const x = Number(a.id), y = Number(b.id);
+  const fx = Number.isFinite(x), fy = Number.isFinite(y);
+  if (fx && fy) return x - y;
+  if (fx !== fy) return fx ? -1 : 1;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
 /**
@@ -214,10 +291,9 @@ export function appointmentsToTasks(appointments) {
  * её id — наименьший из исходных, чтобы он не менялся от синхронизации к синхронизации.
  */
 export function mergeDuplicates(tasks) {
-  const norm = (s) => s.replace(/\s+/g, ' ').toLowerCase();
   const byKey = new Map();
-  for (const t of [...tasks].sort((a, b) => Number(a.id) - Number(b.id))) {
-    const key = `${t.subject}|${t.due}|${norm(t.text)}`;
+  for (const t of [...tasks].sort(byId)) {
+    const key = `${t.subject}|${t.due}|${normText(t.text)}`;
     const first = byKey.get(key);
     if (!first) { byKey.set(key, { ...t }); continue; }
     first.files = Math.max(first.files, t.files);
@@ -339,6 +415,20 @@ export function missingStats(appointments) {
       st.byMonth[month] = (st.byMonth[month] ?? 0) + 1;
     }
   }
+  return st;
+}
+
+/** Сколько в ответе дневника заданий без даты и домашки в темах уроков — без текстов. */
+export function undatedStats(appointments) {
+  const st = { targetNoDate: 0, homeworks: 0, homeworksNoDate: 0, topicHomework: 0, embedKeys: [] };
+  const keys = new Set();
+  for (const a of appointments ?? []) {
+    for (const k of Object.keys(a?.Embed ?? {})) keys.add(k);
+    for (const h of a?.Embed?.TargetHomeworks ?? []) if (h && !day(h.TargetAppointmentDate)) st.targetNoDate++;
+    for (const h of a?.Embed?.Homeworks ?? []) { if (!h) continue; st.homeworks++; if (!day(h.TargetAppointmentDate)) st.homeworksNoDate++; }
+    for (const t of a?.Embed?.Topics ?? []) if ((t?.Homework ?? '').trim()) st.topicHomework++;
+  }
+  st.embedKeys = [...keys].sort();
   return st;
 }
 
@@ -472,15 +562,29 @@ export async function fetchDiary(session, from, to) {
   for (let start = from; start <= to; start = addDays(start, 7)) {
     weeks.push({ start, end: addDays(start, 6) < to ? addDays(start, 6) : to });
   }
+  // Вложение Homework (задания, выданные на уроке, в том числе без даты) сайт дневника сам
+  // не запрашивает. Пробуем один раз: если дневник его не знает и отвечает ошибкой,
+  // запоминаем это в сессии и дальше работаем как раньше.
+  const embedFor = () => (session.embedHomework === false ? EMBED : `${EMBED},Homework`);
   const load = async ({ start, end }) => {
     const data = await api(session, `v1/${session.schoolId}/SchoolBoy/${session.schoolboyId}/Appointment`, {
-      start, end, embed: EMBED, fileRole: 'schoolboy',
+      start, end, embed: embedFor(), fileRole: 'schoolboy',
     });
     return data?.Items ?? [];
   };
   // Первую неделю ждём отдельно: если токен пора продлить, это случится здесь, один раз.
   // Остальные идут по три одновременно — весь год загружается в несколько раз быстрее.
-  const all = weeks.length ? [...await load(weeks[0])] : [];
+  const all = [];
+  if (weeks.length) {
+    try {
+      all.push(...await load(weeks[0]));
+      if (session.embedHomework === undefined) session.embedHomework = true;
+    } catch (e) {
+      if (e.code !== 'api_error' || session.embedHomework === false) throw e;
+      session.embedHomework = false;
+      all.push(...await load(weeks[0]));
+    }
+  }
   for (let i = 1; i < weeks.length; i += 3) {
     const batch = await Promise.all(weeks.slice(i, i + 3).map(load));
     for (const items of batch) all.push(...items);
@@ -488,6 +592,6 @@ export async function fetchDiary(session, from, to) {
   }
   return {
     tasks: appointmentsToTasks(all), lessons: appointmentsToLessons(all), grades: appointmentsToGrades(all),
-    debug: { appointments: all.length, missing: missingStats(all) },
+    debug: { appointments: all.length, missing: missingStats(all), embedHomework: session.embedHomework, undated: undatedStats(all) },
   };
 }

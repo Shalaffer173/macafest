@@ -1,6 +1,6 @@
 // Минимальный клиент Telegram Bot API на long polling, без зависимостей.
 //
-// commands: { '/today': { description, run: async (tgId) => ({ text, button }) }, ... }
+// commands: { '/today': { description, run: async (tgId, args) => ({ text, button }) }, ... }
 // Команды с description показываются в меню бота.
 // onMessage(from) вызывается на каждое личное сообщение — чтобы знать, кто запускал бота.
 export function createBot(token, { publicUrl, commands = {}, onMessage }) {
@@ -42,7 +42,8 @@ export function createBot(token, { publicUrl, commands = {}, onMessage }) {
     const cmd = msg.text.split(/[\s@]/)[0].toLowerCase();
     if (cmd === '/start' || cmd === '/help') return send(msg.chat.id, help(), true);
     if (commands[cmd]) {
-      const { text, button = false } = await commands[cmd].run(msg.from.id);
+      const args = msg.text.trim().split(/\s+/).slice(1).join(' ');
+      const { text, button = false } = await commands[cmd].run(msg.from.id, args);
       return send(msg.chat.id, text, button);
     }
     return send(msg.chat.id, 'Відкрий щоденник кнопкою нижче або надішли /help.', true);

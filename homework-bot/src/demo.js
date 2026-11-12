@@ -56,6 +56,12 @@ export async function login(username) {
   return { demo: true, studentName: 'Демо Учень', schoolName: 'Демо-ліцей' };
 }
 
+function nextSchoolDate(after) {
+  let d = after;
+  for (let k = 0; k < 10; k++) { d = addDays(d, 1); if (subjectsOn(d).length) return d; }
+  return null;
+}
+
 function makeLessons(from, to) {
   const today = todayIso();
   const lessons = [];
@@ -65,6 +71,8 @@ function makeLessons(from, to) {
       let status = 'normal', reason = null, shown = subject;
       if (thisWeek && weekday(date) === 5 && i === 4) { status = 'canceled'; reason = 'Вчитель на курсах'; }
       if (thisWeek && weekday(date) === 3 && i === 3) { status = 'replacement'; shown = 'Хімія'; }
+      // Со второй синхронизации в ближайший учебный день отменяют 2-й урок — так проверяются уведомления о расписании.
+      if (tick > 1 && date === nextSchoolDate(today) && i === 1) { status = 'canceled'; reason = 'Вчитель захворів'; }
       lessons.push({
         id: `${date}-${i + 1}`, date, number: i + 1, start: STARTS[i], duration: 45, subject: shown,
         room: ROOMS[shown] ?? null, teacher: TEACHERS[shown] ?? null,
@@ -172,6 +180,10 @@ function makeTasks() {
     task('107', 'Біологія', 'Конспект §14, намалювати будову клітини', 1),
     task('110', 'Фізична культура', '', 1), // без текста: учитель задал устно, но ответ прикрепить можно
     task('109', 'Зарубіжна література', 'Прочитати повість і написати короткий відгук: https://example.com/povist', -1),
+    // учитель создал задание «без дати» на прошлом уроке — срок: ближайший урок предмета
+    task('111', 'Інформатика', '§ 12, вправа 12', 1, { undated: true }),
+    // домашка, записанная только в теме урока: ответ на неё сдать нельзя
+    task('p900-1', 'Географія', 'Контурна карта: річки Європи', 1, { undated: true, fromTopic: true, topic: 'Гідрографія Європи' }),
   ];
   // Со второй синхронизации «учитель» добавляет задание задним числом.
   if (tick > 1) tasks.push(task('108', 'Хімія', 'Розв’язати задачі 1–5 на с. 61', -1));

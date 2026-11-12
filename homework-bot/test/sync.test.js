@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { diffTasks, syncUser, describeDiff, schoolYearStart, weekEnd } from '../src/sync.js';
-import { openDb } from '../src/db.js';
+import { diffTasks, syncUser, describeDiff, schoolYearStart, weekEnd, scheduleChanges, describeSchedule } from '../src/sync.js';
+import { openDb, backupDatabase } from '../src/db.js';
 import { encrypt, decrypt, verifyInitData, signToken, verifyToken } from '../src/crypto.js';
-import { kyivNow, nextSchoolDay, scheduleText, digestText } from '../src/digest.js';
+import { kyivNow, nextSchoolDay, scheduleText, digestText, nowText, bellsText, morningText } from '../src/digest.js';
 import { createBot } from '../src/telegram.js';
 import {
   appointmentsToTasks, appointmentsToLessons, appointmentsToGrades, mergeDuplicates, findLoginActionId, absorbCookies,
@@ -90,17 +90,17 @@ test('разбор ответа дневника в список заданий'
   const tasks = appointmentsToTasks([
     { Id: 1, Subject: ' Алгебра ', Date: '2026-11-12T00:00:00', Embed: { TargetHomeworks: [
       { Id: 7, Description: ' № 245 ', Topic: 'Рівняння', AppointmentDate: '2026-11-10T00:00:00', TargetAppointmentDate: '2026-11-12T00:00:00', FilesCount: 2 },
-      { Id: 8, Description: '   ' },
+      { Id: 8, Description: '   ', TargetAppointmentDate: '2026-11-12T00:00:00' },
     ] } },
     { Id: 2, Subject: 'Фізика', Date: '2026-11-13', Embed: null },
     null,
   ]);
   assert.deepEqual(tasks, [
-    { id: '7', subject: 'Алгебра', text: '№ 245', topic: 'Рівняння', due: '2026-11-12', assigned: '2026-11-10', files: 2, answered: true },
+    { id: '7', subject: 'Алгебра', text: '№ 245', topic: 'Рівняння', due: '2026-11-12', assigned: '2026-11-10', files: 2, answered: true, undated: false },
     // запись без текста тоже остаётся: на неё в дневнике можно сдать ответ
-    { id: '8', subject: 'Алгебра', text: '', topic: null, due: '2026-11-12', assigned: null, files: 0, answered: false },
+    { id: '8', subject: 'Алгебра', text: '', topic: null, due: '2026-11-12', assigned: null, files: 0, answered: false, undated: false },
   ]);
-  const one = (h) => appointmentsToTasks([{ Subject: 'A', Date: '2026-11-12', Embed: { TargetHomeworks: [{ Id: 1, Description: 'x', ...h }] } }])[0].answered;
+  const one = (h) => appointmentsToTasks([{ Subject: 'A', Date: '2026-11-12', Embed: { TargetHomeworks: [{ Id: 1, Description: 'x', TargetAppointmentDate: '2026-11-12', ...h }] } }])[0].answered;
   assert.equal(one({}), false);
   assert.equal(one({ HaveAnswer: true }), true);
   assert.equal(one({ FilesCount: 1 }), true);
@@ -596,4 +596,159 @@ test('бот в чате: команды, справка и неизвестны
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test('задание без даты: срок — следующий неотменённый урок предмета', () => {
+  const lesson = (Id, Date, Subject, extra = {}) => ({ Id, Date, Subject, ...extra });
+  const tasks = appointmentsToTasks([
+    // 07.11 информатика: учитель создал задание без даты (как на скриншоте)
+    lesson(1, '2026-11-07T00:00:00', 'Інформатика', { Embed: { TargetHomeworks: [
+      { Id: 50, Description: '§ 12, вправа 12', AppointmentDate: '2026-11-07T00:00:00', TargetAppointmentDate: null },
+    ] } }),
+    lesson(2, '2026-11-10', 'Інформатика', { Canceled: true }), // отменён — не считается
+    lesson(3, '2026-11-12', 'Інформатика'),
+    lesson(4, '2026-11-11', 'Фізика'),
+    // вложение Homework: задание дано на этом уроке, без даты; и ещё одно — с датой
+    lesson(5, '2026-11-11', 'Фізика', { Embed: { Homeworks: [
+      { Id: 60, Description: 'Задачі 9.12', AppointmentDate: '2026-11-11T00:00:00' },
+      { Id: 61, Description: 'Параграф 12', AppointmentDate: '2026-11-11T00:00:00', TargetAppointmentDate: '2026-11-13T00:00:00' },
+    ] } }),
+  ]);
+  const by = Object.fromEntries(tasks.map((t) => [t.id, t]));
+  assert.deepEqual({ due: by['50'].due, assigned: by['50'].assigned, undated: by['50'].undated }, { due: '2026-11-12', assigned: '2026-11-07', undated: true });
+  // следующего урока физики в данных нет — неделя после того урока, где задали
+  assert.deepEqual({ due: by['60'].due, undated: by['60'].undated }, { due: '2026-11-18', undated: true });
+  assert.deepEqual({ due: by['61'].due, undated: by['61'].undated }, { due: '2026-11-13', undated: false });
+});
+
+test('домашка из темы урока: берётся, только если настоящего задания нет', () => {
+  const tasks = appointmentsToTasks([
+    { Id: 1, Date: '2026-11-07', Subject: 'Інформатика', Embed: { Topics: [{ Id: 9, Title: 'Статистика', Homework: '§ 12, вправа 12' }] } },
+    { Id: 2, Date: '2026-11-12', Subject: 'Інформатика' },
+    // на этом уроке есть настоящее задание — текст из темы дублировать не нужно
+    { Id: 3, Date: '2026-11-12', Subject: 'Алгебра', Embed: {
+      Topics: [{ Id: 10, Title: 'Рівняння', Homework: '№ 21.2' }],
+      TargetHomeworks: [{ Id: 70, Description: '№ 21.2', AppointmentDate: '2026-11-12', TargetAppointmentDate: '2026-11-14' }],
+    } },
+    // пустое поле и отменённый урок не дают заданий
+    { Id: 4, Date: '2026-11-13', Subject: 'Хімія', Embed: { Topics: [{ Id: 11, Title: 'x', Homework: '  ' }] } },
+    { Id: 5, Date: '2026-11-13', Subject: 'Біологія', Canceled: true, Embed: { Topics: [{ Id: 12, Title: 'x', Homework: 'конспект' }] } },
+  ]);
+  assert.deepEqual(tasks.map((t) => [t.id, t.subject, t.due, !!t.undated, !!t.fromTopic]), [
+    ['70', 'Алгебра', '2026-11-14', false, false],
+    ['p1-9', 'Інформатика', '2026-11-12', true, true],
+  ]);
+});
+
+test('задание без даты: сдвиг срока не сбрасывает галочку и не шлёт уведомление', async () => {
+  const db = openDb(':memory:');
+  db.prepare("INSERT INTO users (tg_id, created_at) VALUES (1, 'x')").run();
+  const iso = (n) => { const d = new Date(); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const mk = (due, undated) => ({ id: '50', subject: 'Інформатика', text: '§ 12', topic: null, due, assigned: iso(-1), files: 0, answered: false, undated });
+  let list = [mk(iso(1), true)];
+  const provider = { fetchTasks: async () => list };
+  const cfg = { daysBack: 10, daysForward: 14 };
+  await syncUser(db, provider, 1, {}, cfg);
+  await syncUser(db, provider, 1, {}, cfg);
+  db.prepare("UPDATE tasks SET done = 1 WHERE task_id = '50'").run();
+
+  list = [mk(iso(3), true)]; // ближайший урок отменили — срок сдвинулся
+  assert.equal(describeDiff(await syncUser(db, provider, 1, {}, cfg)), null);
+  list = [mk(iso(2), false)]; // учитель поставил дату
+  assert.equal(describeDiff(await syncUser(db, provider, 1, {}, cfg)), null);
+  const row = db.prepare('SELECT due, undated, done, changed FROM tasks').get();
+  assert.deepEqual({ ...row }, { due: iso(2), undated: 0, done: 1, changed: 0 });
+});
+
+test('изменения в расписании на ближайшие дни', () => {
+  const now = { date: '2026-11-12', minutes: 10 * 60 }; // четверг, 10:00
+  const L = (date, number, subject, extra = {}) => ({ id: `${date}-${number}-${subject}`, date, number, start: ['08:30', '09:25', '10:25', '11:25'][number - 1], subject, room: '214', status: 'normal', ...extra });
+  const old = [
+    L('2026-11-12', 1, 'Алгебра'),                 // уже прошёл — не трогаем
+    L('2026-11-12', 3, 'Фізика'),
+    L('2026-11-13', 1, 'Хімія'), L('2026-11-13', 2, 'Біологія'), L('2026-11-13', 3, 'Історія'), L('2026-11-13', 4, 'Географія'),
+    L('2026-11-30', 1, 'Музика'),                  // дальше недели — не сравниваем
+  ];
+  const fresh = [
+    L('2026-11-12', 1, 'Алгебра', { status: 'canceled' }),
+    L('2026-11-12', 3, 'Фізика', { room: '305' }),
+    L('2026-11-13', 1, 'Хімія', { status: 'canceled', reason: 'Хвороба вчителя' }),
+    L('2026-11-13', 2, 'Біологія', { status: 'replaced' }), L('2026-11-13', 2, 'Фізика', { status: 'replacement', room: '305' }),
+    L('2026-11-13', 4, 'Географія', { start: '11:35' }),
+    L('2026-11-13', 5, 'Інформатика'),             // новый урок в уже известном дне
+    L('2026-11-16', 1, 'Алгебра'),                 // день, которого раньше не было — не сообщаем
+  ];
+  const changes = scheduleChanges(old, fresh, now);
+  assert.deepEqual(changes.map((c) => [c.date, c.number, c.kind]), [
+    ['2026-11-12', 3, 'room'],
+    ['2026-11-13', 1, 'canceled'],
+    ['2026-11-13', 2, 'replaced'],
+    ['2026-11-13', 3, 'removed'],
+    ['2026-11-13', 4, 'time'],
+    ['2026-11-13', 5, 'added'],
+  ]);
+  assert.deepEqual(describeSchedule(changes, now.date), [
+    '📅 Зміни в розкладі на сьогодні:\n• 3-й урок (Фізика): кабінет 214 → 305',
+    '📅 Зміни в розкладі на завтра:\n• 1-й урок (Хімія) скасовано — Хвороба вчителя\n• 2-й урок: заміна Біологія → Фізика, каб. 305\n'
+      + '• 3-й урок (Історія) прибрано з розкладу\n• 4-й урок (Географія): тепер о 11:35, а не о 11:25\n• додано 5-й урок: Інформатика, каб. 214',
+  ]);
+  assert.deepEqual(scheduleChanges(old, old, now), [], 'без изменений — тишина');
+});
+
+test('/now, дзвінки й ранкове нагадування', () => {
+  const db = openDb(':memory:');
+  db.prepare("INSERT INTO users (tg_id, created_at) VALUES (1, 'x')").run();
+  const lesson = db.prepare('INSERT INTO lessons (tg_id, lesson_id, date, number, start, duration, subject, room, status) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)');
+  lesson.run('a', '2026-11-12', 1, '08:30', 45, 'Алгебра', '214', 'normal');
+  lesson.run('b', '2026-11-12', 2, '09:25', 45, 'Хімія', '308', 'normal');
+  lesson.run('c', '2026-11-12', 3, '10:25', 45, 'Фізика', null, 'canceled');
+  lesson.run('d', '2026-11-12', 4, '11:25', 45, 'Історія', 'спортзал', 'normal');
+  lesson.run('e', '2026-11-16', 1, '08:30', 45, 'Географія', '310', 'normal');
+  const at = (h, m) => ({ date: '2026-11-12', minutes: h * 60 + m });
+
+  assert.equal(nowText(db, 1, at(7, 50)), '🌅 Уроки ще не почались. Далі 1-й урок: Алгебра о 08:30, каб. 214 — через 40 хвилин.');
+  assert.equal(nowText(db, 1, at(8, 41)), '🔔 Зараз 1-й урок: Алгебра, каб. 214. До дзвінка 34 хвилини (о 09:15).\nДалі 2-й урок: Хімія о 09:25, каб. 308.');
+  assert.equal(nowText(db, 1, at(9, 20)), '☕ Перерва. Далі 2-й урок: Хімія о 09:25, каб. 308 — через 5 хвилин.');
+  // отменённый 3-й урок пропускается: после 2-го сразу 4-й
+  assert.equal(nowText(db, 1, at(10, 30)), '☕ Перерва. Далі 4-й урок: Історія о 11:25, спортзал — через 55 хвилин.');
+  assert.equal(nowText(db, 1, at(12, 0)), '🔔 Зараз 4-й урок: Історія, спортзал. До дзвінка 10 хвилин (о 12:10).\nЦе останній урок на сьогодні.');
+  assert.equal(nowText(db, 1, at(15, 0)), 'Уроки на сьогодні закінчились (останній дзвінок о 12:10).\nНаступні уроки — понеділок, 16.11, перший о 08:30: Географія, каб. 310.');
+  assert.equal(nowText(db, 1, { date: '2026-11-14', minutes: 600 }), 'Сьогодні уроків немає.\nНаступні уроки — понеділок, 16.11, перший о 08:30: Географія, каб. 310.');
+
+  assert.equal(bellsText(db, 1, '2026-11-12'), '🔔 Дзвінки на сьогодні:\n1. 08:30–09:15 Алгебра\n2. 09:25–10:10 Хімія\n4. 11:25–12:10 Історія');
+  assert.equal(bellsText(db, 1, '2026-11-14'), '🔔 Дзвінки на понеділок, 16.11:\n1. 08:30–09:15 Географія');
+
+  const task = db.prepare("INSERT INTO tasks (tg_id, task_id, subject, text, due, done, first_seen) VALUES (1, ?, ?, ?, '2026-11-12', ?, 'x')");
+  assert.equal(morningText(db, 1, '2026-11-12'), null, 'заданий нет — молчим');
+  task.run('1', 'Алгебра', '№ 21.2', 0);
+  task.run('2', 'Хімія', 'зроблене', 1);
+  assert.equal(morningText(db, 1, '2026-11-12'),
+    '☀️ Доброго ранку! На сьогодні ще не зроблено 1 з 2:\n• Алгебра: № 21.2\n\nПерший урок о 08:30: Алгебра, каб. 214.');
+  db.prepare("UPDATE tasks SET done = 1").run();
+  assert.equal(morningText(db, 1, '2026-11-12'), null, 'всё сделано — молчим');
+});
+
+test('резервная копия базы: одна в день, хранятся последние семь', async () => {
+  const { mkdtempSync, readdirSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'hw-backup-'));
+  const path = join(dir, 'bot.sqlite');
+  const db = openDb(path);
+  db.prepare("INSERT INTO users (tg_id, created_at) VALUES (42, 'x')").run();
+
+  const file = backupDatabase(db, path, '2026-11-12');
+  assert.ok(file.endsWith(join('backups', 'bot-2026-11-12.sqlite')));
+  assert.equal(backupDatabase(db, path, '2026-11-12'), null, 'за этот день копия уже есть');
+  const copy = openDb(file);
+  assert.equal(copy.prepare('SELECT tg_id FROM users').get().tg_id, 42, 'в копии те же данные');
+  copy.close();
+
+  for (let d = 1; d <= 8; d++) writeFileSync(join(dir, 'backups', `bot-2026-10-0${d}.sqlite`), ''); // старые копии
+  backupDatabase(db, path, '2026-11-13');
+  const left = readdirSync(join(dir, 'backups')).sort();
+  assert.equal(left.length, 7);
+  assert.equal(left.at(-1), 'bot-2026-11-13.sqlite');
+  assert.ok(left.includes('bot-2026-11-12.sqlite'));
+  assert.equal(backupDatabase(db, ':memory:', '2026-11-14'), null);
 });

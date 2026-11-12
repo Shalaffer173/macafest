@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 export function openDb(path) {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
@@ -108,9 +108,35 @@ export function openDb(path) {
     db.exec('ALTER TABLE users ADD COLUMN digest INTEGER NOT NULL DEFAULT 1');          // присылать ли вечернюю сводку
     db.exec('ALTER TABLE users ADD COLUMN digest_sent TEXT');                           // за какой день сводка уже отправлена
   }
+  // v0.5: задания без даты, время вечерней сводки и утреннего напоминания
+  if (!db.prepare('PRAGMA table_info(tasks)').all().some((c) => c.name === 'undated')) {
+    db.exec('ALTER TABLE tasks ADD COLUMN undated INTEGER NOT NULL DEFAULT 0'); // срок вычислен: учитель дату не указал
+  }
+  if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'morning_hour')) {
+    db.exec('ALTER TABLE users ADD COLUMN digest_hour INTEGER');  // час вечерней сводки; NULL — по умолчанию сервера
+    db.exec('ALTER TABLE users ADD COLUMN morning_hour INTEGER'); // час утреннего напоминания; NULL — выключено
+    db.exec('ALTER TABLE users ADD COLUMN morning_sent TEXT');
+  }
   // v0.1.3: задания, по которым ученик сдал ответ в дневнике, отмечаются сделанными
   if (!db.prepare('PRAGMA table_info(tasks)').all().some((c) => c.name === 'answered')) {
     db.exec('ALTER TABLE tasks ADD COLUMN answered INTEGER NOT NULL DEFAULT 0');
   }
   return db;
+}
+
+/**
+ * Резервная копия базы за день: data/backups/bot-YYYY-MM-DD.sqlite. Хранятся последние `keep` копий.
+ * Возвращает путь к новой копии или null, если копия за этот день уже есть.
+ * VACUUM INTO пишет целостный снимок даже во время работы бота.
+ */
+export function backupDatabase(db, dbPath, date, keep = 7) {
+  if (dbPath === ':memory:') return null;
+  const dir = join(dirname(dbPath), 'backups');
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, `bot-${date}.sqlite`);
+  if (existsSync(file)) return null;
+  db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+  const old = readdirSync(dir).filter((f) => /^bot-\d{4}-\d{2}-\d{2}\.sqlite$/.test(f)).sort().slice(0, -keep);
+  for (const f of old) rmSync(join(dir, f), { force: true });
+  return file;
 }
