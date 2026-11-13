@@ -181,6 +181,11 @@ async function runSync(tgId, { notify }) {
       console.log(`[sync] ${tgId}: весь год с ${result.from}, уроков в ответе ${result.debug.appointments}, пропуски ${JSON.stringify(result.debug.missing)}`);
       console.log(`[sync] ${tgId}: без дати ${JSON.stringify(result.debug.undated)}, вкладення Homework: ${result.debug.embedHomework}`);
     }
+    // Пропавшие задания: есть ли они в ответе дневника вообще (вдруг склеились с другими или сменили id).
+    for (const t of result.diff.removed.slice(0, 20)) {
+      const where = result.debug?.where?.get(String(t.task_id));
+      console.log(`[sync] ${tgId}: пропало ${t.task_id} (${t.subject}, ${t.due}): в ответе ${where ? JSON.stringify(where) : 'нет'}`);
+    }
     const text = notify && describeDiff(result);
     if (text && bot) await bot.send(tgId, text, true);
     return result;

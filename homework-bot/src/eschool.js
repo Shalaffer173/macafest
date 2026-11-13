@@ -418,6 +418,25 @@ export function missingStats(appointments) {
   return st;
 }
 
+/** Где в ответе дневника встречается каждое задание (без текстов): чтобы разбирать «пропавшие» задания. */
+export function homeworkIndex(appointments) {
+  const idx = new Map();
+  for (const a of appointments ?? []) {
+    for (const [key, list] of [['target', a?.Embed?.TargetHomeworks], ['given', a?.Embed?.Homeworks]]) {
+      for (const h of list ?? []) {
+        if (!h) continue;
+        const e = idx.get(String(h.Id)) ?? { in: [], lesson: [] };
+        e.in.push(key);
+        e.lesson.push(day(a.Date));
+        e.target = day(h.TargetAppointmentDate);
+        e.assigned = day(h.AppointmentDate);
+        idx.set(String(h.Id), e);
+      }
+    }
+  }
+  return idx;
+}
+
 /** Сколько в ответе дневника заданий без даты и домашки в темах уроков — без текстов. */
 export function undatedStats(appointments) {
   const st = { targetNoDate: 0, homeworks: 0, homeworksNoDate: 0, topicHomework: 0, embedKeys: [] };
@@ -592,6 +611,6 @@ export async function fetchDiary(session, from, to) {
   }
   return {
     tasks: appointmentsToTasks(all), lessons: appointmentsToLessons(all), grades: appointmentsToGrades(all),
-    debug: { appointments: all.length, missing: missingStats(all), embedHomework: session.embedHomework, undated: undatedStats(all) },
+    debug: { appointments: all.length, missing: missingStats(all), embedHomework: session.embedHomework, undated: undatedStats(all), where: homeworkIndex(all) },
   };
 }
