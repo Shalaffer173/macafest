@@ -13,18 +13,31 @@ let bot = null;
 let currentUrl = null;
 let stopping = false;
 
+let botRestarts = 0;
+
 function startBot(url) {
   if (url === currentUrl) return;
   currentUrl = url;
   const launch = () => {
-    console.log(`\n[tunnel] адрес: ${url}\n[tunnel] запускаю бота; открывай приложение кнопкой меню «Домашка»`);
-    bot = spawn(process.execPath, ['--env-file-if-exists=.env', 'src/server.js'], {
+    console.log(`\n[tunnel] адрес: ${currentUrl}\n[tunnel] запускаю бота; открывай приложение кнопкой меню «Домашка»`);
+    const child = spawn(process.execPath, ['--env-file-if-exists=.env', 'src/server.js'], {
       stdio: 'inherit',
-      env: { ...process.env, PUBLIC_URL: url, PORT: port },
+      env: { ...process.env, PUBLIC_URL: currentUrl, PORT: port },
     });
-    bot.on('exit', () => { bot = null; });
+    const startedAt = Date.now();
+    bot = child;
+    child.on('exit', (code, signal) => {
+      if (bot === child) bot = null;
+      // Бот упал сам (а не мы его остановили ради нового адреса): перезапускаем, иначе тоннель
+      // жив, служба «работает», а бот молчит. Пауза растёт, если он падает сразу после запуска.
+      if (stopping || child.replaced) return;
+      botRestarts = Date.now() - startedAt > 60_000 ? 0 : botRestarts + 1;
+      const wait = Math.min(5 * 2 ** botRestarts, 300);
+      console.error(`[tunnel] бот завершился (код ${code ?? signal}), перезапускаю через ${wait} с`);
+      setTimeout(() => { if (!bot && !stopping) launch(); }, wait * 1000);
+    });
   };
-  if (bot) { bot.once('exit', launch); bot.kill(); } else launch();
+  if (bot) { bot.replaced = true; bot.once('exit', launch); bot.kill(); } else launch();
 }
 
 // Пауза перед переподключением растёт от 5 секунд до 5 минут: если стучаться каждые

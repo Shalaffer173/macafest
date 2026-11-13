@@ -14,6 +14,11 @@ import { kyivNow, nextSchoolDay, scheduleText, digestText, nowText, bellsText, m
 import * as eschool from './eschool.js';
 import * as demo from './demo.js';
 
+// Необработанная ошибка в фоне не должна молча валить бота: пишем её в журнал и работаем дальше.
+// Если упадёт совсем (uncaughtException), процесс завершится и npm run tunnel перезапустит его.
+process.on('unhandledRejection', (e) => console.error('[crash] необработанная ошибка:', e?.stack ?? e));
+process.on('uncaughtException', (e) => { console.error('[crash] бот упал:', e?.stack ?? e); process.exit(1); });
+
 const provider = config.demo ? demo : eschool;
 const db = openDb(config.dbPath);
 const stats = createStats(db, config.secretKey);
