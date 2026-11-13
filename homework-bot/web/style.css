@@ -30,7 +30,7 @@ body {
   font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-tap-highlight-color: transparent;
 }
-main { max-width: 560px; margin: 0 auto; padding: 16px 16px calc(24px + env(safe-area-inset-bottom)); }
+main { max-width: 560px; margin: 0 auto; padding: 16px 16px calc(92px + env(safe-area-inset-bottom)); }
 h1 { font-size: 20px; margin: 0; line-height: 1.2; }
 h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 20px 4px 8px; }
 h2.overdue { color: var(--danger); }
@@ -222,3 +222,32 @@ ul.rc { margin-top: 12px; }
 .linkrow.late { margin-top: 12px; font-weight: 600; }
 .linkrow.late small { font-weight: 400; color: var(--warn); }
 .linkrow.late.on { box-shadow: inset 0 0 0 2px var(--warn); }
+
+/* ---------- карточка задания: просроченное — красная рамка ---------- */
+.task.late { box-shadow: inset 0 0 0 2px var(--danger); }
+
+/* ---------- нижнее меню ---------- */
+.tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; justify-content: center;
+  background: var(--bg); border-top: 1px solid var(--line); padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); }
+.tabbar button { flex: 1; max-width: 140px; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  border: 0; background: none; color: var(--muted); font: inherit; padding: 4px 0; cursor: pointer; }
+.tabbar button[aria-pressed="true"] { color: var(--accent); }
+.tabbar .ico { position: relative; width: 26px; height: 26px; display: block; }
+.tabbar svg { width: 26px; height: 26px; display: block; }
+.tabbar svg .line { fill: none; stroke: currentColor; stroke-width: 2.3; stroke-linecap: round; stroke-linejoin: round; }
+.tabbar svg .line.bold { stroke-width: 2.9; }
+.tabbar svg .fill { fill: currentColor; stroke: none; }
+.tabbar svg .line-join { stroke: currentColor; stroke-width: 1.2; stroke-linejoin: round; }
+.tabbar .lbl { font-size: 11px; font-weight: 600; }
+.tabbar .badge { position: absolute; top: -4px; right: -10px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--danger); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; box-shadow: 0 0 0 2px var(--bg); }
+
+/* ---------- «Сьогодні» ---------- */
+.card.now { margin-top: 14px; }
+.card.now .label { font-size: 13px; color: var(--muted); }
+.card.now .big { font-size: 22px; font-weight: 700; margin-top: 2px; overflow-wrap: anywhere; }
+.card.now .bar { margin-top: 10px; }
+.card.now .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 8px; font-size: 14px; }
+.linkrow.debts { box-shadow: inset 0 0 0 2px var(--danger); }
+.calm { margin: 4px 4px 0; }
+.right { display: flex; justify-content: flex-end; margin-top: 6px; }

@@ -4,7 +4,7 @@ tg?.expand();
 
 const app = document.getElementById('app');
 let data = null;
-let view = remembered('view', 'homework'); // homework | schedule | grades
+let view = remembered('view2', 'today'); // today | homework | schedule | grades
 let filter = 'todo'; // фильтр на вкладке «Домашка»
 let week = null; // понедельник недели, показанной в расписании
 let scrollToToday = false;
@@ -126,25 +126,19 @@ async function watchLogin() {
 
 // ---------- вкладка «Домашка» ----------
 
+/** Просрочено: не сделано, а день урока прошёл. Добавленное задним числом считается просроченным всегда. */
+const overdue = (t, today) => !t.done && !t.removed && !t.archived && (t.due < today || t.backdated);
+
 function taskNode(t, today) {
   const box = el('input', { type: 'checkbox', checked: t.done, disabled: t.removed });
   box.setAttribute('aria-label', `Зроблено: ${t.subject}`);
-  const li = el('li', { className: `task${t.done ? ' done' : ''}${t.removed ? ' removed' : ''}${t.archived ? ' archived' : ''}` },
+  // Никаких меток на карточке: просроченное выделяется красной рамкой, сделанное и убранное — зачёркиванием.
+  const li = el('li', { className: `task${t.done ? ' done' : ''}${t.removed ? ' removed' : ''}${t.archived ? ' archived' : ''}${overdue(t, today) ? ' late' : ''}` },
     box,
     el('div', { className: 'body' },
       el('div', { className: 'subject', textContent: t.subject }),
-      el('div', { className: t.text ? 'text' : 'text none', textContent: t.text || 'Без тексту завдання' }),
-      el('div', { className: 'meta' },
-        t.removed && el('span', { className: 'tag danger', textContent: 'прибрано вчителем' }),
-        t.archived && el('span', { className: 'tag', textContent: 'до підключення бота' }),
-        t.answered && el('span', { className: 'tag ok', textContent: 'відповідь здано' }),
-        t.undated && el('span', { className: 'tag warn', textContent: 'дату не вказано' }),
-        t.undated && t.assigned && el('span', { textContent: `задано ${shortDate(t.assigned)}` }),
-        t.backdated && el('span', { className: 'tag warn', textContent: t.firstSeen ? `додано заднім числом ${shortDate(t.firstSeen.slice(0, 10))}` : 'додано заднім числом' }),
-        t.changed && el('span', { className: 'tag warn', textContent: 'змінено' }),
-        !t.done && !t.removed && !t.archived && t.due < today && el('span', { className: 'tag danger', textContent: 'прострочено' }),
-        t.files > 0 && el('span', { textContent: `📎 ${t.files}` }),
-        t.topic && el('span', { textContent: t.topic }))));
+      el('div', { className: t.text ? 'text' : 'text none', textContent: t.text || 'Без тексту завдання' })));
+  if (overdue(t, today)) li.querySelector('.subject').setAttribute('aria-label', `${t.subject}, прострочено`);
   if (data.canAnswer && !t.removed) {
     // Отдельная кнопка: нажатие на саму карточку по-прежнему ставит галочку.
     const act = el('button', { className: 'act', textContent: t.answered ? 'Моя відповідь ›' : 'Здати ›' });
@@ -857,6 +851,160 @@ function renderSettings() {
   ];
 }
 
+// ---------- иконки нижнего меню ----------
+// Все четыре нарисованы в одной сетке 24×24 с одинаковой толщиной линий, чтобы выглядели одного размера.
+const ICONS = {
+  today: () => svg('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' },
+    svg('rect', { x: 3.5, y: 5, width: 17, height: 15.5, rx: 3, class: 'line' }),
+    svg('path', { d: 'M8 2.8v4M16 2.8v4M3.5 10h17', class: 'line' }),
+    svg('rect', { x: 7.3, y: 13, width: 4.6, height: 4.2, rx: 1, class: 'fill' })),
+  // квадрат с галочкой, которая выходит за его край
+  homework: () => svg('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' },
+    svg('path', { d: 'M14.5 3.5H6.5a3 3 0 0 0-3 3v11a3 3 0 0 0 3 3h11a3 3 0 0 0 3-3v-4', class: 'line' }),
+    svg('path', { d: 'M8 11.2l3.8 3.8L21 4.8', class: 'line bold' })),
+  // лежащая книга: обложка с наклейкой, корешок со страницами и закладка
+  schedule: () => svg('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' },
+    svg('g', { transform: 'translate(0 -1.3)' },
+      svg('path', { class: 'fill', 'fill-rule': 'evenodd', d: 'M2.6 10.9 11.4 5.8a1.8 1.8 0 0 1 1.8 0l8.3 4.6a.9.9 0 0 1 0 1.6L12.7 17.1a1.8 1.8 0 0 1-1.8 0L2.6 12.5a.9.9 0 0 1 0-1.6zM14.6 8.3l2.5-1.4 1.9 1.05-2.5 1.4z' }),
+      svg('path', { class: 'line', d: 'M3.4 12.9c-1.3.8-1.3 2.4 0 3.2l7.6 4.4a1.8 1.8 0 0 0 1.8 0l8.6-4.9' }),
+      svg('path', { class: 'fill', d: 'M6.2 14.6v6.1l1.4-1.1 1.4 1.1v-5.3z' }))),
+  // столбики и стрелка вверх над ними
+  grades: () => svg('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' },
+    svg('path', { d: 'M3 21h18', class: 'line' }),
+    svg('rect', { x: 5, y: 14.2, width: 3.6, height: 4.8, rx: 1, class: 'fill' }),
+    svg('rect', { x: 10.2, y: 11.4, width: 3.6, height: 7.6, rx: 1, class: 'fill' }),
+    svg('rect', { x: 15.4, y: 9, width: 3.6, height: 10, rx: 1, class: 'fill' }),
+    svg('path', { d: 'M3 11h3.6l3.4-3.4h3l4.2-3', class: 'line' }),
+    svg('path', { d: 'M20.4 3l-4.4.6 3.1 3.4z', class: 'fill line-join' })),
+};
+
+// ---------- вкладка «Сьогодні» ----------
+
+const OFF_LESSON = new Set(['canceled', 'replaced']);
+const toMin = (hhmm) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+const nowMinutes = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
+const lessonsOn = (date) => (data.lessons ?? [])
+  .filter((l) => l.date === date && l.start && !OFF_LESSON.has(l.status))
+  .map((l) => ({ ...l, from: toMin(l.start), to: toMin(l.start) + (l.duration || 45) }))
+  .sort((a, b) => a.from - b.from);
+const roomText = (r) => (!r ? '' : /^\d/.test(r) ? `каб. ${r}` : r);
+const lessonName = (l) => (l.number ? `${l.number}-й урок` : 'Урок');
+
+/** Ближайший после `after` день, в котором есть уроки. */
+function nextSchoolDate(after) {
+  return [...new Set((data.lessons ?? []).filter((l) => l.date > after && !OFF_LESSON.has(l.status)).map((l) => l.date))].sort()[0] ?? null;
+}
+
+/** Карточка «что сейчас»: идущий урок с полосой до звонка, перемена или ближайший урок. */
+function nowCard(today) {
+  const list = lessonsOn(today);
+  const m = nowMinutes();
+  const current = list.find((l) => l.from <= m && m < l.to);
+  const next = list.find((l) => l.from > m);
+  const where = (l) => [roomText(l.room), l.teacher].filter(Boolean).join(' · ');
+  const go = el('button', { className: 'mini', textContent: 'Розклад ›' });
+  go.addEventListener('click', () => switchView('schedule'));
+  if (current) {
+    const pct = Math.round(((m - current.from) / (current.to - current.from)) * 100);
+    const left = current.to - m;
+    return el('section', { className: 'card now' },
+      el('div', { className: 'label', textContent: `Зараз · ${lessonName(current)}` }),
+      el('div', { className: 'big', textContent: current.subject }),
+      where(current) && el('div', { className: 'muted', textContent: where(current) }),
+      el('div', { className: 'bar' }, el('i', { style: `width:${pct}%` })),
+      el('div', { className: 'row' },
+        el('span', { textContent: `до дзвінка ${left} хв` }),
+        el('span', { className: 'muted', textContent: next ? `далі ${next.subject} о ${next.start}` : 'останній урок' })));
+  }
+  if (next) {
+    const first = next === list[0];
+    return el('section', { className: 'card now' },
+      el('div', { className: 'label', textContent: first ? 'Уроки ще не почались' : 'Перерва' }),
+      el('div', { className: 'big', textContent: next.subject }),
+      el('div', { className: 'muted', textContent: [`${lessonName(next)} о ${next.start}`, roomText(next.room)].filter(Boolean).join(' · ') }),
+      el('div', { className: 'row' }, el('span', { textContent: `через ${next.from - m} хв` }), go));
+  }
+  const day = nextSchoolDate(today);
+  const firstNext = day && lessonsOn(day)[0];
+  return el('section', { className: 'card now' },
+    el('div', { className: 'label', textContent: list.length ? 'Уроки на сьогодні закінчились' : 'Сьогодні уроків немає' }),
+    firstNext && el('div', { className: 'muted', textContent: `${dayLabel(day, today)}: перший урок о ${firstNext.start} — ${firstNext.subject}` }),
+    el('div', { className: 'row' }, el('span'), go));
+}
+
+function renderToday(today) {
+  if (answering) return renderAnswer();
+  const hidden = new Set(data.hiddenSubjects ?? []);
+  const live = data.tasks.filter((t) => !hidden.has(t.subject) && !t.removed && !t.archived);
+  const tomorrow = nextSchoolDate(today) ?? addDays(today, 1);
+  const dueOn = (date) => live.filter((t) => t.due === date && !t.backdated);
+  const todayTasks = dueOn(today), tomorrowTasks = dueOn(tomorrow);
+  const debts = live.filter((t) => overdue(t, today));
+  const weekAgo = addDays(today, -7);
+  const fresh = (data.grades ?? []).filter((g) => g.kind !== 'missing' && g.date >= weekAgo).slice(0, 6);
+
+  const block = (title, tasks, emptyText) => {
+    const undone = tasks.filter((t) => !t.done);
+    return [
+      el('h2', { textContent: undone.length ? `${title} · залишилось ${undone.length}` : title }),
+      undone.length ? el('ul', {}, ...undone.map((t) => taskNode(t, today)))
+        : el('p', { className: 'muted calm', textContent: tasks.length ? '✓ Усе зроблено' : emptyText }),
+    ];
+  };
+
+  const debtRow = debts.length > 0 && el('button', { className: 'linkrow debts' },
+    el('span', {}, `Борги: ${debts.length}`), el('span', { className: 'go', textContent: '›' }));
+  if (debtRow) debtRow.addEventListener('click', () => { filter = 'todo'; switchView('homework'); });
+
+  const allGrades = el('button', { className: 'mini', textContent: 'Усі оцінки ›' });
+  allGrades.addEventListener('click', () => switchView('grades'));
+
+  return [
+    nowCard(today),
+    debtRow,
+    ...block('Здати сьогодні', todayTasks, 'На сьогодні нічого не задано'),
+    ...block(tomorrow === addDays(today, 1) ? 'На завтра' : dayLabel(tomorrow, today), tomorrowTasks, 'Поки нічого не задано'),
+    el('h2', { textContent: 'Нові оцінки' }),
+    fresh.length
+      ? el('ul', {}, ...fresh.map((g) => el('li', { className: 'grade' }, chip(g),
+        el('div', { className: 'body' },
+          el('div', { className: 'subject', textContent: g.subject }),
+          el('div', { className: 'meta' }, el('span', { textContent: shortDate(g.date) }), g.type && el('span', { textContent: g.type }))))))
+      : el('p', { className: 'muted calm', textContent: 'За тиждень оцінок не було' }),
+    el('div', { className: 'right' }, allGrades),
+  ];
+}
+
+// ---------- нижнее меню ----------
+
+const TABS = [['today', 'Сьогодні'], ['homework', 'Домашка'], ['schedule', 'Розклад'], ['grades', 'Оцінки']];
+
+function switchView(id) {
+  view = id;
+  subject = null;
+  answering = null;
+  reportCard = false;
+  settingsOpen = false;
+  remember('view2', id);
+  scrollToToday = id === 'schedule';
+  window.scrollTo(0, 0);
+  render();
+}
+
+function tabbar(today) {
+  const hidden = new Set(data.hiddenSubjects ?? []);
+  const debts = data.tasks.filter((t) => !hidden.has(t.subject) && overdue(t, today)).length;
+  return el('nav', { className: 'tabbar' }, ...TABS.map(([id, label]) => {
+    const b = el('button', {}, el('span', { className: 'ico' }, ICONS[id](),
+      id === 'homework' && debts > 0 && el('span', { className: 'badge', textContent: debts > 99 ? '99+' : String(debts) })),
+      el('span', { className: 'lbl', textContent: label }));
+    b.setAttribute('aria-pressed', String(view === id && !settingsOpen));
+    if (id === 'homework' && debts) b.setAttribute('aria-label', `${label}, боргів: ${debts}`);
+    b.addEventListener('click', () => switchView(id));
+    return b;
+  }));
+}
+
 // ---------- общий каркас ----------
 
 function render() {
@@ -887,9 +1035,10 @@ function render() {
   });
 
   const body = settingsOpen ? renderSettings()
-    : view === 'schedule' ? renderSchedule(today) : view === 'grades' ? renderGrades(today) : renderHomework(today);
+    : view === 'schedule' ? renderSchedule(today) : view === 'grades' ? renderGrades(today)
+      : view === 'homework' ? renderHomework(today) : renderToday(today);
   // Системная кнопка «назад» в Telegram возвращает со страницы предмета или ответа к списку.
-  if (settingsOpen || (view === 'grades' && (subject || reportCard)) || (view === 'homework' && answering)) tg?.BackButton?.show?.(); else tg?.BackButton?.hide?.();
+  if (settingsOpen || (view === 'grades' && (subject || reportCard)) || answering) tg?.BackButton?.show?.(); else tg?.BackButton?.hide?.();
 
   app.replaceChildren(...[
     el('header', {},
@@ -898,21 +1047,11 @@ function render() {
         el('div', { className: 'who', textContent: data.school ?? '' })),
       refresh),
     data.error && el('p', { className: 'error', textContent: `Не вдалося оновити: ${data.error}` }),
-    switcher('nav', [['homework', 'Домашка'], ['schedule', 'Розклад'], ['grades', 'Оцінки']], view, (id) => {
-      view = id;
-      subject = null;
-      answering = null;
-      reportCard = false;
-      settingsOpen = false;
-      remember('view', id);
-      scrollToToday = id === 'schedule';
-      window.scrollTo(0, 0);
-      render();
-    }),
     ...body,
     settings,
     data.lastSync && el('p', { className: 'muted center', textContent: `Оновлено ${new Date(data.lastSync).toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` }),
-    logout].filter(Boolean));
+    logout,
+    tabbar(today)].filter(Boolean));
 
   // При переходе в расписание показываем сразу сегодняшний день, а не понедельник.
   if (scrollToToday) {
@@ -950,6 +1089,11 @@ async function watchSync() {
   } catch { /* связь пропала: данные обновятся при следующем открытии */ }
   watching = false;
 }
+
+setInterval(() => {
+  const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
+  if (data?.loggedIn && view === 'today' && !settingsOpen && !answering && !typing) render();
+}, 60_000);
 
 tg?.BackButton?.onClick?.(() => {
   if (settingsOpen) settingsOpen = false;
