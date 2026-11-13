@@ -73,6 +73,18 @@ export function openDb(path) {
       last_at  TEXT NOT NULL,
       messages INTEGER NOT NULL DEFAULT 0
     );
+    -- анонимная статистика по дням (см. src/stats.js)
+    CREATE TABLE IF NOT EXISTS stats_daily (
+      date   TEXT NOT NULL,
+      metric TEXT NOT NULL,
+      value  INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (date, metric)
+    );
+    CREATE TABLE IF NOT EXISTS stats_seen (   -- отпечатки «кто был сегодня», удаляются на следующий день
+      date TEXT NOT NULL,
+      h    TEXT NOT NULL,
+      PRIMARY KEY (date, h)
+    );
     CREATE TABLE IF NOT EXISTS login_attempts (
       tg_id INTEGER NOT NULL,
       at    INTEGER NOT NULL
@@ -117,6 +129,8 @@ export function openDb(path) {
     db.exec('ALTER TABLE users ADD COLUMN morning_hour INTEGER'); // час утреннего напоминания; NULL — выключено
     db.exec('ALTER TABLE users ADD COLUMN morning_sent TEXT');
   }
+  // v0.5.2: домашку из темы урока больше не показываем — удаляем такие записи (их id начинаются с «p»)
+  db.exec("DELETE FROM tasks WHERE task_id LIKE 'p%'");
   // v0.1.3: задания, по которым ученик сдал ответ в дневнике, отмечаются сделанными
   if (!db.prepare('PRAGMA table_info(tasks)').all().some((c) => c.name === 'answered')) {
     db.exec('ALTER TABLE tasks ADD COLUMN answered INTEGER NOT NULL DEFAULT 0');

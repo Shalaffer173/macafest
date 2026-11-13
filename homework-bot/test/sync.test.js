@@ -621,23 +621,15 @@ test('задание без даты: срок — следующий неотм
   assert.deepEqual({ due: by['61'].due, undated: by['61'].undated }, { due: '2026-11-13', undated: false });
 });
 
-test('домашка из темы урока: берётся, только если настоящего задания нет', () => {
+test('домашка из темы урока не становится заданием', () => {
   const tasks = appointmentsToTasks([
     { Id: 1, Date: '2026-11-07', Subject: 'Інформатика', Embed: { Topics: [{ Id: 9, Title: 'Статистика', Homework: '§ 12, вправа 12' }] } },
-    { Id: 2, Date: '2026-11-12', Subject: 'Інформатика' },
-    // на этом уроке есть настоящее задание — текст из темы дублировать не нужно
     { Id: 3, Date: '2026-11-12', Subject: 'Алгебра', Embed: {
       Topics: [{ Id: 10, Title: 'Рівняння', Homework: '№ 21.2' }],
       TargetHomeworks: [{ Id: 70, Description: '№ 21.2', AppointmentDate: '2026-11-12', TargetAppointmentDate: '2026-11-14' }],
     } },
-    // пустое поле и отменённый урок не дают заданий
-    { Id: 4, Date: '2026-11-13', Subject: 'Хімія', Embed: { Topics: [{ Id: 11, Title: 'x', Homework: '  ' }] } },
-    { Id: 5, Date: '2026-11-13', Subject: 'Біологія', Canceled: true, Embed: { Topics: [{ Id: 12, Title: 'x', Homework: 'конспект' }] } },
   ]);
-  assert.deepEqual(tasks.map((t) => [t.id, t.subject, t.due, !!t.undated, !!t.fromTopic]), [
-    ['70', 'Алгебра', '2026-11-14', false, false],
-    ['p1-9', 'Інформатика', '2026-11-12', true, true],
-  ]);
+  assert.deepEqual(tasks.map((t) => t.id), ['70']);
 });
 
 test('задание без даты: сдвиг срока не сбрасывает галочку и не шлёт уведомление', async () => {
@@ -758,4 +750,35 @@ test('о пропаже старых и сделанных заданий не �
   const row = (subject, due, done = 0) => ({ task_id: subject, subject, due, done });
   const diff = { added: [], changed: [], moved: [], removed: [row('Географія', iso(-35)), row('Хімія', iso(2), 1), row('Фізика', iso(2))] };
   assert.equal(describeDiff({ diff, first: false }), `🗑 Прибрано: Фізика на ${iso(2).slice(8, 10)}.${iso(2).slice(5, 7)}`);
+});
+
+test('анонимная статистика: итоги по дням, один человек считается раз в день, отпечатки удаляются', async () => {
+  const { createStats, syncMetrics } = await import('../src/stats.js');
+  const db = openDb(':memory:');
+  let today = '2026-11-12';
+  const stats = createStats(db, 'ab'.repeat(32), () => today);
+  stats.seen(5); stats.seen(5); stats.seen(6);
+  stats.count('app_opens'); stats.count('app_opens', 2);
+  assert.deepEqual(stats.day(), { active_users: 2, app_opens: 3 });
+  assert.ok(db.prepare('SELECT h FROM stats_seen').all().every((r) => /^[0-9a-f]{16}$/.test(r.h)), 'хранится только отпечаток');
+
+  db.prepare("INSERT INTO users (tg_id, session, created_at) VALUES (5, 'x', 'x')").run();
+  const task = db.prepare("INSERT INTO tasks (tg_id, task_id, subject, text, due, done, answered, archived, removed, first_seen) VALUES (5, ?, 'A', 't', '2026-11-12', ?, ?, ?, ?, 'x')");
+  task.run('1', 1, 1, 0, 0); task.run('2', 0, 0, 0, 0); task.run('3', 1, 0, 1, 0); task.run('4', 1, 0, 0, 1); // архив и убранное не считаются
+
+  today = '2026-11-13';
+  stats.seen(5); // новый день — снова считается
+  assert.equal(stats.closeDay('2026-11-12'), true);
+  assert.equal(stats.closeDay('2026-11-12'), false, 'день закрывается один раз');
+  assert.deepEqual(stats.day('2026-11-12'), { active_users: 2, app_opens: 3, due_total: 2, due_done: 1, due_answered: 1, users_logged: 1, day_closed: 1 });
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM stats_seen WHERE date < '2026-11-13'").get().n, 0, 'вчерашние отпечатки удалены');
+  assert.equal(stats.day().active_users, 1);
+
+  const result = {
+    first: false, gradesSilent: false, schedule: [{}, {}],
+    diff: { changed: [{}], added: [{ backdated: true }, { undated: true }, { archived: true }, { silent: true }, {}] },
+    grades: { added: [{ kind: 'current' }, { kind: 'missing' }] },
+  };
+  assert.deepEqual(syncMetrics(result), { found_tasks: 3, found_backdated: 1, found_undated: 1, found_changed: 1, found_grades: 1, found_absences: 1, found_schedule: 2 });
+  assert.deepEqual(syncMetrics({ ...result, first: true }), {});
 });

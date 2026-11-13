@@ -246,37 +246,10 @@ export function appointmentsToTasks(appointments) {
     }
   }
 
-  // Домашка, записанная прямо в теме урока (поле «Домашнє завдання» календарного плана).
-  // Это не отдельное задание дневника: ответ на него сдать нельзя, поэтому id не числовой.
-  // Берём её, только если на том же уроке нет настоящего задания с тем же смыслом.
-  const real = [...tasks.values()];
-  for (const a of appointments ?? []) {
-    const date = day(a?.Date);
-    if (!a || !date || LESSON_OFF(a)) continue;
-    const subject = (a.Subject ?? '').trim() || 'Без предмета';
-    for (const topic of a.Embed?.Topics ?? []) {
-      const text = (topic?.Homework ?? '').trim();
-      if (!text) continue;
-      const duplicate = real.some((t) => t.subject === subject && (t.assigned === date || normText(t.text) === normText(text)));
-      if (duplicate) continue;
-      const id = `p${a.Id}-${topic.Id}`;
-      if (tasks.has(id)) continue;
-      tasks.set(id, {
-        id, subject, text,
-        topic: (topic.Title ?? '').trim() || null,
-        due: dueFor(subject, date),
-        assigned: date,
-        files: 0,
-        answered: false,
-        undated: true,
-        fromTopic: true,
-      });
-    }
-  }
   return mergeDuplicates([...tasks.values()].filter((t) => t.due));
 }
 
-/** Сначала числовые id дневника по возрастанию, потом составные (домашка из темы урока). */
+/** id дневника по возрастанию (нечисловые, если вдруг попадутся, — в конце). */
 function byId(a, b) {
   const x = Number(a.id), y = Number(b.id);
   const fx = Number.isFinite(x), fy = Number.isFinite(y);

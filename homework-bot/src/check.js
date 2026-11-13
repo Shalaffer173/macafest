@@ -34,7 +34,7 @@ try {
   // Задания без даты: сколько их и откуда они пришли — чтобы понять, как их хранит этот дневник.
   console.log(`   задания без даты: ${JSON.stringify(debug.undated)}, вложение Homework: ${debug.embedHomework}`);
   for (const t of tasks.filter((x) => x.undated)) {
-    console.log(`   · без даты: ${t.subject}, задано ${t.assigned}, ближайший урок ${t.due}${t.fromTopic ? ' (из темы урока)' : ''}: ${t.text.replace(/\s+/g, ' ').slice(0, 60)}`);
+    console.log(`   · без даты: ${t.subject}, задано ${t.assigned}, ближайший урок ${t.due}: ${t.text.replace(/\s+/g, ' ').slice(0, 60)}`);
   }
   console.log(`\n3. Расписание на сегодня (${today}):`);
   const todays = lessons.filter((l) => l.date === today).sort((a, b) => (a.number ?? 99) - (b.number ?? 99));

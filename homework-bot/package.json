@@ -1,6 +1,6 @@
 {
   "name": "homework-bot",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "description": "Telegram-бот с мини-приложением: домашние задания, расписание и оценки из «Єдиної Школи»",
@@ -11,6 +11,7 @@
     "tunnel": "node src/dev-tunnel.js",
     "autostart": "bash scripts/autostart.sh",
     "check": "node src/check.js",
+    "stats": "node --no-warnings --env-file-if-exists=.env src/stats-report.js",
     "users": "node --no-warnings --env-file-if-exists=.env src/users.js",
     "test": "node --test"
   }

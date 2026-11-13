@@ -1,19 +1,24 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { readFileSync, readdirSync } from 'node:fs';
 import { Readable } from 'node:stream';
-import { extname, join, normalize } from 'node:path';
+import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { openDb, backupDatabase } from './db.js';
 import { encrypt, decrypt, verifyInitData, signToken, verifyToken } from './crypto.js';
 import { syncUser, describeDiff } from './sync.js';
 import { createBot } from './telegram.js';
+import { createStats, syncMetrics } from './stats.js';
 import { kyivNow, nextSchoolDay, scheduleText, digestText, nowText, bellsText, morningText } from './digest.js';
 import * as eschool from './eschool.js';
 import * as demo from './demo.js';
 
 const provider = config.demo ? demo : eschool;
 const db = openDb(config.dbPath);
+const stats = createStats(db, config.secretKey);
+const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+const STARTED = Date.now();
 const WEB = fileURLToPath(new URL('../web/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml' };
 
@@ -24,6 +29,7 @@ const deleteUser = (tgId) => {
 };
 function noteVisitor(from) {
   if (!from?.id) return;
+  stats.seen(from.id);
   const now = new Date().toISOString();
   db.prepare(`INSERT INTO visitors (tg_id, name, username, first_at, last_at, messages) VALUES (?, ?, ?, ?, ?, 1)
     ON CONFLICT(tg_id) DO UPDATE SET name = excluded.name, username = excluded.username, last_at = excluded.last_at, messages = messages + 1`)
@@ -114,10 +120,49 @@ const commands = {
     run: async (tgId) => {
       deleteUser(tgId);
       console.log(`[logout] ${tgId}: пользователь стёр свои данные командой`);
+      stats.count('logouts');
       return { text: 'Готово: токен, завдання, розклад і оцінки стерто. Щоб почати знову, надішли /start.' };
     },
   },
 };
+// /status — только для владельца (ADMIN_ID в .env). В меню команд не показывается.
+function ago(iso) {
+  if (!iso) return 'ніколи';
+  const min = Math.round((Date.now() - Date.parse(iso)) / 60000);
+  return min < 1 ? 'щойно' : min < 60 ? `${min} хв тому` : min < 1440 ? `${Math.floor(min / 60)} год тому` : `${Math.floor(min / 1440)} дн тому`;
+}
+function statusText() {
+  const n = (sql, ...a) => db.prepare(sql).get(...a).n;
+  const up = Math.round((Date.now() - STARTED) / 60000);
+  const last = db.prepare('SELECT MAX(last_sync) AS t FROM users WHERE session IS NOT NULL').get().t;
+  const errors = db.prepare("SELECT sync_error AS e, COUNT(*) AS n FROM users WHERE sync_error IS NOT NULL GROUP BY sync_error").all();
+  const today = stats.day();
+  let backup = 'немає';
+  try {
+    const files = readdirSync(join(dirname(config.dbPath), 'backups')).filter((f) => f.endsWith('.sqlite')).sort();
+    if (files.length) backup = `${files.at(-1)} (усього ${files.length})`;
+  } catch { /* папки ещё нет */ }
+  return [
+    `🛠 Стан бота v${VERSION}`,
+    `Працює ${up >= 60 ? `${Math.floor(up / 60)} год ${up % 60} хв` : `${up} хв`}, адреса: ${config.publicUrl}`,
+    `Користувачі: увійшли ${n('SELECT COUNT(*) AS n FROM users WHERE session IS NOT NULL')}, без сесії ${n('SELECT COUNT(*) AS n FROM users WHERE session IS NULL')}, писали боту ${n('SELECT COUNT(*) AS n FROM visitors')}`,
+    `Останнє оновлення щоденника: ${ago(last)}, зараз оновлюється: ${running.size}`,
+    errors.length ? `Помилки: ${errors.map((e) => `${e.e} — ${e.n}`).join('; ')}` : 'Помилок синхронізації немає',
+    `Сьогодні: людей ${today.active_users ?? 0}, відкриттів ${today.app_opens ?? 0}, галочок ${today.tasks_ticked ?? 0}, повідомлень ${today.messages_sent ?? 0}`,
+    `Резервна копія: ${backup}`,
+  ].join('\n');
+}
+commands['/status'] = {
+  run: async (tgId) => (config.adminId && tgId === config.adminId
+    ? { text: statusText() }
+    : { text: 'Відкрий щоденник кнопкою нижче або надішли /help.', button: true }),
+};
+// Сколько раз пользуются каждой командой — для статистики (без того, кто именно).
+for (const [name, c] of Object.entries(commands)) {
+  const run = c.run;
+  c.run = (tgId, args) => { stats.count(`cmd${name.replace('/', '_')}`); return run(tgId, args); };
+}
+
 const bot = config.demo ? null : createBot(config.botToken, { publicUrl: config.publicUrl, commands, onMessage: noteVisitor });
 
 // ---------- сессии ----------
@@ -186,8 +231,9 @@ async function runSync(tgId, { notify }) {
       const where = result.debug?.where?.get(String(t.task_id));
       console.log(`[sync] ${tgId}: пропало ${t.task_id} (${t.subject}, ${t.due}): в ответе ${where ? JSON.stringify(where) : 'нет'}`);
     }
+    for (const [k, v] of Object.entries(syncMetrics(result))) stats.count(k, v);
     const text = notify && describeDiff(result);
-    if (text && bot) await bot.send(tgId, text, true);
+    if (text && bot) { await bot.send(tgId, text, true); stats.count('messages_sent'); }
     return result;
   } catch (e) {
     if (e.status === 401) return null; // пользователь не вошёл — синхронизировать нечего
@@ -288,8 +334,7 @@ function state(tgId) {
   }
   const tasks = db.prepare(`SELECT task_id AS id, subject, text, topic, due, assigned, files, done, backdated, changed, removed, archived, answered, undated
     FROM tasks WHERE tg_id = ? ORDER BY due, subject`).all(tgId)
-    .map((t) => ({ ...t, done: !!t.done, backdated: !!t.backdated, changed: !!t.changed, removed: !!t.removed, archived: !!t.archived, answered: !!t.answered, undated: !!t.undated,
-      fromTopic: !/^\d+$/.test(t.id) })); // домашка из темы урока: сдать ответ на неё нельзя
+    .map((t) => ({ ...t, done: !!t.done, backdated: !!t.backdated, changed: !!t.changed, removed: !!t.removed, archived: !!t.archived, answered: !!t.answered, undated: !!t.undated }));
   const lessons = db.prepare(`SELECT lesson_id AS id, date, number, start, duration, subject, room, teacher, topic, status, reason
     FROM lessons WHERE tg_id = ? AND date >= ? ORDER BY date, number, start`).all(tgId, scheduleFrom());
   const grades = db.prepare(`SELECT grade_id AS id, subject, date, label, value, kind, type, topic, comment
@@ -320,7 +365,11 @@ async function handleApi(req, res, path) {
   if (!user) return send(res, 401, { error: 'Відкрий застосунок через бота в Telegram' });
   const tgId = user.id;
 
-  if (req.method === 'GET' && path === '/api/state') return send(res, 200, state(tgId));
+  if (req.method === 'GET' && path === '/api/state') {
+    const st = state(tgId);
+    if (st.loggedIn) { stats.count('app_opens'); stats.seen(tgId); }
+    return send(res, 200, st);
+  }
   // Короткий ответ для опроса во время входа и синхронизации, чтобы не гонять весь список каждые 2 секунды.
   if (req.method === 'GET' && path === '/api/status') return send(res, 200, status(tgId));
 
@@ -342,6 +391,7 @@ async function handleApi(req, res, path) {
         clearAttempts(tgId);
         logins.delete(tgId);
         console.log(`[login] ${tgId}: вход выполнен`);
+        stats.count('logins');
         startSync(tgId);
       }).catch((e) => {
         console.error(`[login] ${tgId}: ${e.code ?? 'error'} ${e.message}`);
@@ -384,6 +434,13 @@ async function handleApi(req, res, path) {
     const { done } = await readJson(req);
     const r = db.prepare('UPDATE tasks SET done = ?, done_at = ?, changed = 0, archived = 0 WHERE tg_id = ? AND task_id = ?')
       .run(done ? 1 : 0, done ? new Date().toISOString() : null, tgId, decodeURIComponent(m[1]));
+    if (r.changes) {
+      // «Вовремя» — отмечено не позже дня, к которому задание задано.
+      const due = db.prepare('SELECT due FROM tasks WHERE tg_id = ? AND task_id = ?').get(tgId, decodeURIComponent(m[1]))?.due;
+      if (done) { stats.count('tasks_ticked'); if (due && due >= kyivNow().date) stats.count('ticked_in_time'); }
+      else stats.count('tasks_unticked');
+      stats.seen(tgId);
+    }
     return r.changes ? send(res, 200, { ok: true }) : send(res, 404, { error: 'Завдання не знайдено' });
   }
 
@@ -407,6 +464,7 @@ async function handleApi(req, res, path) {
         db.prepare(`UPDATE tasks SET answered = 1, done = 1, done_at = ?, archived = 0, changed = 0, files = ?
           WHERE tg_id = ? AND task_id = ?`).run(new Date().toISOString(), answer.files.length, tgId, taskId);
         console.log(`[answer] ${tgId}: ответ на задание ${taskId} сохранён в дневнике (файлов: ${answer.files.length})`);
+        stats.count('answers_sent');
         return send(res, 200, answer);
       }
       if (req.method === 'POST' && action === 'files') {
@@ -434,6 +492,7 @@ async function handleApi(req, res, path) {
   if (req.method === 'POST' && path === '/api/logout') {
     deleteUser(tgId);
     console.log(`[logout] ${tgId}: пользователь стёр свои данные`);
+    stats.count('logouts');
     return send(res, 200, { loggedIn: false });
   }
   return send(res, 404, { error: 'Not found' });
@@ -516,12 +575,12 @@ async function sendDigests() {
     if (u.digest && now.minutes >= evening * 60 && now.minutes < 23 * 60 && (u.digest_sent ?? '') < now.date) {
       db.prepare('UPDATE users SET digest_sent = ? WHERE tg_id = ?').run(now.date, u.tg_id);
       const text = digestText(db, u.tg_id, now.date);
-      if (text && bot) await bot.send(u.tg_id, text, true);
+      if (text && bot) { await bot.send(u.tg_id, text, true); stats.count('messages_sent'); stats.count('digests_sent'); }
     }
     if (u.morning_hour != null && now.minutes >= u.morning_hour * 60 && now.minutes < 12 * 60 && (u.morning_sent ?? '') < now.date) {
       db.prepare('UPDATE users SET morning_sent = ? WHERE tg_id = ?').run(now.date, u.tg_id);
       const text = morningText(db, u.tg_id, now.date);
-      if (text && bot) await bot.send(u.tg_id, text, true);
+      if (text && bot) { await bot.send(u.tg_id, text, true); stats.count('messages_sent'); stats.count('mornings_sent'); }
     }
   }
 }
@@ -530,6 +589,8 @@ setInterval(() => { sendDigests().catch((e) => console.error('[digest]', e.messa
 // Резервная копия базы раз в день (проверяем каждый час и через минуту после запуска).
 function backup() {
   try {
+    const yesterday = new Date(Date.parse(`${kyivNow().date}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+    if (stats.closeDay(yesterday)) console.log(`[stats] итоги за ${yesterday} записаны`);
     const file = backupDatabase(db, config.dbPath, kyivNow().date);
     if (file) console.log(`[backup] копия базы: ${file}`);
   } catch (e) {

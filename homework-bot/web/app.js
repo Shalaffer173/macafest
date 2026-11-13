@@ -138,15 +138,14 @@ function taskNode(t, today) {
         t.removed && el('span', { className: 'tag danger', textContent: 'прибрано вчителем' }),
         t.archived && el('span', { className: 'tag', textContent: 'до підключення бота' }),
         t.answered && el('span', { className: 'tag ok', textContent: 'відповідь здано' }),
-        t.undated && el('span', { className: 'tag warn', textContent: t.fromTopic ? 'з теми уроку, без дати' : 'дату не вказано' }),
+        t.undated && el('span', { className: 'tag warn', textContent: 'дату не вказано' }),
         t.undated && t.assigned && el('span', { textContent: `задано ${shortDate(t.assigned)}` }),
         t.backdated && el('span', { className: 'tag warn', textContent: 'додано заднім числом' }),
         t.changed && el('span', { className: 'tag warn', textContent: 'змінено' }),
         !t.done && !t.removed && !t.archived && t.due < today && el('span', { className: 'tag danger', textContent: 'прострочено' }),
         t.files > 0 && el('span', { textContent: `📎 ${t.files}` }),
         t.topic && el('span', { textContent: t.topic }))));
-  // Ответ можно сдать только на задание дневника; домашка из темы урока — просто текст учителя.
-  if (data.canAnswer && !t.removed && !t.fromTopic) {
+  if (data.canAnswer && !t.removed) {
     // Отдельная кнопка: нажатие на саму карточку по-прежнему ставит галочку.
     const act = el('button', { className: 'act', textContent: t.answered ? 'Моя відповідь ›' : 'Здати ›' });
     act.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openAnswer(t); });
