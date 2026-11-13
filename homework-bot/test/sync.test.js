@@ -752,3 +752,10 @@ test('резервная копия базы: одна в день, хранят
   assert.ok(left.includes('bot-2026-11-12.sqlite'));
   assert.equal(backupDatabase(db, ':memory:', '2026-11-14'), null);
 });
+
+test('о пропаже старых и сделанных заданий не сообщаем', () => {
+  const iso = (n) => { const d = new Date(); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const row = (subject, due, done = 0) => ({ task_id: subject, subject, due, done });
+  const diff = { added: [], changed: [], moved: [], removed: [row('Географія', iso(-35)), row('Хімія', iso(2), 1), row('Фізика', iso(2))] };
+  assert.equal(describeDiff({ diff, first: false }), `🗑 Прибрано: Фізика на ${iso(2).slice(8, 10)}.${iso(2).slice(5, 7)}`);
+});

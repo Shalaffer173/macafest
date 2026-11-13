@@ -299,7 +299,10 @@ export function describeDiff({ diff, first, grades, gradesSilent, schedule }) {
       : `🆕 ${t.subject} ${when}\n${cut(t.text)}`);
   }
   for (const t of diff.changed) lines.push(`✏️ Змінено: ${t.subject} на ${fmt(t.due)}\n${cut(t.text)}`);
-  for (const t of diff.removed) lines.push(`🗑 Прибрано: ${t.subject} на ${fmt(t.due)}`);
+  // О пропаже старых или уже сделанных заданий не пишем: это ни на что не влияет, а в дневнике
+  // такое случается при правке старых записей. Сообщаем только о том, что ещё предстоит сделать.
+  const soon = shift(kyivNow().date, -1);
+  for (const t of diff.removed) if (!t.done && t.due >= soon) lines.push(`🗑 Прибрано: ${t.subject} на ${fmt(t.due)}`);
   if (schedule?.length) lines.push(...describeSchedule(schedule, kyivNow().date));
   if (grades && !gradesSilent) {
     const kind = (g) => (g.type ? ` (${g.type.toLowerCase()})` : '');
