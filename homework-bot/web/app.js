@@ -140,7 +140,7 @@ function taskNode(t, today) {
         t.answered && el('span', { className: 'tag ok', textContent: 'відповідь здано' }),
         t.undated && el('span', { className: 'tag warn', textContent: 'дату не вказано' }),
         t.undated && t.assigned && el('span', { textContent: `задано ${shortDate(t.assigned)}` }),
-        t.backdated && el('span', { className: 'tag warn', textContent: 'додано заднім числом' }),
+        t.backdated && el('span', { className: 'tag warn', textContent: t.firstSeen ? `додано заднім числом ${shortDate(t.firstSeen.slice(0, 10))}` : 'додано заднім числом' }),
         t.changed && el('span', { className: 'tag warn', textContent: 'змінено' }),
         !t.done && !t.removed && !t.archived && t.due < today && el('span', { className: 'tag danger', textContent: 'прострочено' }),
         t.files > 0 && el('span', { textContent: `📎 ${t.files}` }),
@@ -230,14 +230,28 @@ function renderHomework(today) {
   const doneCount = live.filter((t) => t.done).length;
   const pct = live.length ? Math.round((doneCount / live.length) * 100) : 0;
 
-  const shown = visible.filter((t) => (filter === 'todo' ? !t.done && !t.removed && !t.archived : filter === 'done' ? t.done : true));
-  const normal = () => (shown.length
+  // Задания, которые учитель добавил задним числом за последние две недели (по дате, когда бот их заметил).
+  const since = addDays(today, -14);
+  const backdated = visible.filter((t) => t.backdated && !t.removed && (t.firstSeen ?? '').slice(0, 10) >= since)
+    .sort((a, b) => (a.firstSeen < b.firstSeen ? 1 : -1));
+  if (filter === 'backdated' && !backdated.length) filter = 'todo';
+  const shown = filter === 'backdated' ? backdated
+    : visible.filter((t) => (filter === 'todo' ? !t.done && !t.removed && !t.archived : filter === 'done' ? t.done : true));
+  const normal = () => (filter === 'backdated'
+    ? [el('p', { className: 'muted found', textContent: 'Завдання, які вчителі додали на минулі дні за останні 2 тижні. Новіші — зверху.' }),
+      el('ul', {}, ...backdated.map((t) => taskNode(t, today)))]
+    : shown.length
     ? taskGroups(shown, today, { overdue: filter === 'todo', desc: filter !== 'todo' })
     : [empty(hidden.size && !visible.length ? 'Усі предмети сховано' : filter === 'todo' ? '🎉 Усе зроблено' : 'Тут поки порожньо')]);
 
   // Поиск идёт по всем заданиям — с архивом и скрытыми предметами — и перерисовывает
   // только список, чтобы поле ввода не теряло фокус и клавиатура не пряталась.
+  const late = backdated.length > 0 && el('button', { className: `linkrow late${filter === 'backdated' ? ' on' : ''}` },
+    el('span', {}, `⚠️ Заднім числом за 2 тижні: ${backdated.length}`, backdated.some((t) => !t.done) ? el('small', { textContent: ` · не зроблено ${backdated.filter((t) => !t.done).length}` }) : null),
+    el('span', { className: 'go', textContent: filter === 'backdated' ? '×' : '›' }));
+  if (late) late.addEventListener('click', () => { filter = filter === 'backdated' ? 'todo' : 'backdated'; render(); });
   const controls = el('div', {},
+    late,
     switcher('tabs', [['todo', 'Треба зробити'], ['done', 'Зроблено'], ['all', 'Усі']], filter, (id) => { filter = id; render(); }),
     ...subjectFilter(hidden));
   const list = el('div', {});

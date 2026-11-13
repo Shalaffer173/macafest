@@ -332,7 +332,7 @@ function state(tgId) {
     const login = logins.get(tgId);
     return { loggedIn: false, loggingIn: !!login?.pending, error: login?.error ?? u?.sync_error ?? null };
   }
-  const tasks = db.prepare(`SELECT task_id AS id, subject, text, topic, due, assigned, files, done, backdated, changed, removed, archived, answered, undated
+  const tasks = db.prepare(`SELECT task_id AS id, subject, text, topic, due, assigned, files, done, backdated, changed, removed, archived, answered, undated, first_seen AS firstSeen
     FROM tasks WHERE tg_id = ? ORDER BY due, subject`).all(tgId)
     .map((t) => ({ ...t, done: !!t.done, backdated: !!t.backdated, changed: !!t.changed, removed: !!t.removed, archived: !!t.archived, answered: !!t.answered, undated: !!t.undated }));
   const lessons = db.prepare(`SELECT lesson_id AS id, date, number, start, duration, subject, room, teacher, topic, status, reason

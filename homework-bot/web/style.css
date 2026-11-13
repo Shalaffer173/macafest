@@ -217,3 +217,8 @@ ul.rc { margin-top: 12px; }
 .setting select { font: inherit; padding: 9px 10px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--muted) 40%, transparent); background: var(--bg); color: var(--text); }
 .setting .saved { margin: 0; }
 .commands { margin-top: 8px; }
+
+/* ---------- задания задним числом ---------- */
+.linkrow.late { margin-top: 12px; font-weight: 600; }
+.linkrow.late small { font-weight: 400; color: var(--warn); }
+.linkrow.late.on { box-shadow: inset 0 0 0 2px var(--warn); }
