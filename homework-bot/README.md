@@ -158,6 +158,28 @@ npm run stats -- --csv > stats.csv   # для Excel или Google Таблиц
 Восстановить: остановить бота, скопировать нужную копию на место `data/bot.sqlite`, запустить снова.
 В копиях те же зашифрованные токены, что и в базе, поэтому обращаться с ними нужно так же бережно.
 
+## Постоянный адрес вместо тоннеля (Tailscale Funnel)
+
+Бесплатный тоннель `localhost.run` меняет адрес и иногда перестаёт давать его вовсе. Постоянный бесплатный адрес
+даёт Tailscale Funnel: он работает как системная служба и переживает перезагрузки.
+
+```sh
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up                    # откроется ссылка для входа (Google, GitHub и т. п.)
+sudo tailscale funnel --bg 8080      # при первом запуске попросит разрешить Funnel по ссылке
+tailscale funnel status              # здесь адрес вида https://ИМЯ.tailXXXX.ts.net
+```
+
+Потом в `.env`:
+
+```
+TUNNEL=none
+PUBLIC_URL=https://ИМЯ.tailXXXX.ts.net
+```
+
+и `systemctl --user restart homework-bot`. Бот перестанет поднимать тоннель и будет использовать этот адрес.
+Выключить Funnel: `sudo tailscale funnel --bg off`.
+
 ## Тесты
 
 ```sh

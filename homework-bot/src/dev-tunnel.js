@@ -11,7 +11,12 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+// Служба запускает этот скрипт без .env — читаем его сами (значения из окружения важнее).
+try { process.loadEnvFile('.env'); } catch { /* файла нет — работаем по умолчанию */ }
+
 const port = process.env.PORT || '8080';
+// TUNNEL=none — тоннель не нужен: адрес постоянный (Tailscale Funnel, свой сервер) и задан в PUBLIC_URL.
+const noTunnel = process.env.TUNNEL === 'none';
 // Сколько ждать адрес от тоннеля, прежде чем считать попытку неудачной (после сна или перезагрузки
 // сеть поднимается не сразу, и ssh может висеть минутами без ответа).
 const waitSec = Number(process.env.TUNNEL_WAIT || 45);
@@ -75,7 +80,7 @@ function startTunnel() {
   tunnel = child;
   // Адреса нет слишком долго — обрываем попытку, она перезапустится с паузой.
   const watchdog = setTimeout(() => {
-    if (!gotUrl) { lastLine = `адреса не дочекався за ${waitSec} с`; child.killAll(); }
+    if (!gotUrl) { lastLine = `адреса не дочекався за ${waitSec} с${lastLine ? `; ssh написав: ${lastLine}` : ', ssh нічого не написав'}`; child.killAll(); }
   }, waitSec * 1000);
   const onData = (chunk) => {
     const text = String(chunk);
@@ -112,7 +117,14 @@ function stop() {
   setTimeout(() => process.exit(0), 300);
 }
 
-// Бот — сразу, со старым адресом (или с адресом из .env), тоннель — параллельно.
-currentUrl = savedUrl() || process.env.PUBLIC_URL || 'https://example.invalid';
-launch();
-startTunnel();
+if (noTunnel) {
+  if (!process.env.PUBLIC_URL) { console.error('[tunnel] TUNNEL=none, но в .env нет PUBLIC_URL — кнопка приложения не заработает'); }
+  currentUrl = process.env.PUBLIC_URL || 'https://example.invalid';
+  console.log('[tunnel] тоннель выключен (TUNNEL=none), постоянный адрес из .env');
+  launch();
+} else {
+  // Бот — сразу, со старым адресом (или с адресом из .env), тоннель — параллельно.
+  currentUrl = savedUrl() || process.env.PUBLIC_URL || 'https://example.invalid';
+  launch();
+  startTunnel();
+}
