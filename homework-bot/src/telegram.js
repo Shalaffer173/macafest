@@ -18,7 +18,7 @@ export function createBot(token, { publicUrl, commands = {}, onMessage }) {
     return data.result;
   }
 
-  const openButton = { inline_keyboard: [[{ text: '📋 Відкрити щоденник', web_app: { url: publicUrl } }]] };
+  const openButton = { inline_keyboard: [[{ text: '📋 Открыть дневник', web_app: { url: publicUrl } }]] };
 
   async function send(chatId, text, withButton = false) {
     try {
@@ -29,10 +29,9 @@ export function createBot(token, { publicUrl, commands = {}, onMessage }) {
   }
 
   const help = () => [
-    'Привіт! Я показую домашку, розклад і оцінки з «Єдиної Школи» в одному місці: ' +
-    'завдання списком із галочками, здача відповіді прямо звідси, сповіщення про нові завдання й оцінки.',
-    'Пароль від щоденника я не зберігаю: він потрібен один раз для входу, далі працює тимчасовий токен.',
-    'Для шкільного дослідження я рахую анонімну статистику: лише підсумки за день, без імен і без твого ID.',
+    'Привет! Я показываю домашку, расписание и оценки из «Єдиної Школи» в одном месте: ' +
+    'задания списком с галочками, сдача ответа прямо отсюда, уведомления о новых заданиях и оценках.',
+    'Пароль от дневника я не храню: он нужен один раз для входа, дальше работает временный токен.',
     Object.entries(commands).filter(([, c]) => c.description).map(([name, c]) => `${name} — ${c.description}`).join('\n'),
   ].join('\n\n');
 
@@ -47,7 +46,7 @@ export function createBot(token, { publicUrl, commands = {}, onMessage }) {
       const { text, button = false } = await commands[cmd].run(msg.from.id, args);
       return send(msg.chat.id, text, button);
     }
-    return send(msg.chat.id, 'Відкрий щоденник кнопкою нижче або надішли /help.', true);
+    return send(msg.chat.id, 'Открой дневник кнопкой ниже или отправь /help.', true);
   }
 
   async function poll() {

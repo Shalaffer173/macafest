@@ -575,7 +575,7 @@ test('бот в чате: команды, справка и неизвестны
       publicUrl: 'https://app.example',
       onMessage: (from) => seen.push(from.id),
       commands: {
-        '/today': { description: 'розклад на сьогодні', run: async (id) => ({ text: `розклад для ${id}` }) },
+        '/today': { description: 'расписание на сегодня', run: async (id) => ({ text: `розклад для ${id}` }) },
         '/hidden': { run: async () => ({ text: 'секрет', button: true }) },
       },
     });
@@ -589,7 +589,7 @@ test('бот в чате: команды, справка и неизвестны
     assert.deepEqual(seen, [5, 5, 5, 5], 'каждое личное сообщение отмечается, групповые — нет');
     assert.deepEqual([sent[0].text, sent[1].text], ['розклад для 5', 'розклад для 5']);
     assert.equal(sent[0].reply_markup, undefined);
-    assert.match(sent[2].text, /\/today — розклад на сьогодні/);
+    assert.match(sent[2].text, /\/today — расписание на сегодня/);
     assert.doesNotMatch(sent[2].text, /hidden/);
     assert.equal(sent[2].reply_markup.inline_keyboard[0][0].web_app.url, 'https://app.example');
     assert.match(sent[3].text, /\/help/);

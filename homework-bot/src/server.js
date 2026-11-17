@@ -68,7 +68,7 @@ const needLogin = { text: 'Спершу увійди в щоденник: від
 // Команды бота в чате. Отвечают по данным из базы, к дневнику не обращаются.
 const commands = {
   '/today': {
-    description: 'розклад на сьогодні',
+    description: 'расписание на сегодня',
     run: async (tgId) => {
       if (!loggedIn(tgId)) return needLogin;
       const today = kyivNow().date;
@@ -76,7 +76,7 @@ const commands = {
     },
   },
   '/tomorrow': {
-    description: 'розклад на наступний навчальний день',
+    description: 'расписание на следующий учебный день',
     run: async (tgId) => {
       if (!loggedIn(tgId)) return needLogin;
       const today = kyivNow().date;
@@ -84,15 +84,15 @@ const commands = {
     },
   },
   '/now': {
-    description: 'який урок зараз і що далі',
+    description: 'какой урок сейчас и что дальше',
     run: async (tgId) => (loggedIn(tgId) ? { text: nowText(db, tgId, kyivNow()) } : needLogin),
   },
   '/bells': {
-    description: 'розклад дзвінків',
+    description: 'расписание звонков',
     run: async (tgId) => (loggedIn(tgId) ? { text: bellsText(db, tgId, kyivNow().date) } : needLogin),
   },
   '/digest': {
-    description: 'вечірнє зведення: /digest 19 або /digest off',
+    description: 'вечерняя сводка: /digest 19 или /digest off',
     run: async (tgId, args) => {
       if (!loggedIn(tgId)) return needLogin;
       let hour = parseHour(args, EVENING);
@@ -108,7 +108,7 @@ const commands = {
     },
   },
   '/morning': {
-    description: 'ранкове нагадування: /morning 7 або /morning off',
+    description: 'утреннее напоминание: /morning 7 или /morning off',
     run: async (tgId, args) => {
       if (!loggedIn(tgId)) return needLogin;
       let hour = parseHour(args, MORNING);
@@ -121,7 +121,7 @@ const commands = {
     },
   },
   '/delete': {
-    description: 'стерти всі мої дані',
+    description: 'стереть все мои данные',
     run: async (tgId) => {
       deleteUser(tgId);
       console.log(`[logout] ${tgId}: пользователь стёр свои данные командой`);
@@ -160,7 +160,7 @@ function statusText() {
 commands['/status'] = {
   run: async (tgId) => (config.adminId && tgId === config.adminId
     ? { text: statusText() }
-    : { text: 'Відкрий щоденник кнопкою нижче або надішли /help.', button: true }),
+    : { text: 'Открой дневник кнопкой ниже или отправь /help.', button: true }),
 };
 // Сколько раз пользуются каждой командой — для статистики (без того, кто именно).
 for (const [name, c] of Object.entries(commands)) {
