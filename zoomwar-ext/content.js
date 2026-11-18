@@ -62,21 +62,6 @@ if (!window.__zoomwar_loaded) {
             (el.textContent || "")).toLowerCase();
   }
 
-  // Click a menu/button whose visible text or label equals/contains a word.
-  // `root` limits the search; `exact` avoids matching long containers.
-  function clickByText(words, root = document, exact = false) {
-    const nodes = root.querySelectorAll(
-      'a,span,div,li,button,[role="menuitem"],[role="button"]');
-    for (const n of nodes) {
-      if (!visible(n)) continue;
-      const t = norm(n.textContent).toLowerCase();
-      if (!t || t.length > 40) continue;
-      const hit = words.some((w) => exact ? t === w : t.includes(w));
-      if (hit) { n.click(); return true; }
-    }
-    return false;
-  }
-
   // ---------------- HAND RAISE ----------------
   const HAND_WORDS = [
     "raise hand", "lower hand", "raise your hand", "lower your hand",
@@ -196,21 +181,42 @@ if (!window.__zoomwar_loaded) {
   }
 
   // ---------------- PARTICIPANTS / RENAME ----------------
+  // Zoom hides parts of its UI in Shadow DOM, which document.querySelectorAll
+  // cannot see, so participant queries must walk open shadow roots too.
+  function deepQueryAll(selectors, root = document) {
+    const out = [];
+    const seen = new Set();
+    const visit = (node) => {
+      for (const sel of selectors) {
+        let found;
+        try { found = node.querySelectorAll(sel); } catch (e) { continue; }
+        found.forEach((e) => { if (!seen.has(e)) { seen.add(e); out.push(e); } });
+      }
+      let all;
+      try { all = node.querySelectorAll("*"); } catch (e) { return; }
+      for (const el of all) if (el.shadowRoot) visit(el.shadowRoot);
+    };
+    visit(root);
+    return out;
+  }
+
   function findParticipantsPanel() {
-    return queryAll([
+    return deepQueryAll([
       '.participants-section-container',
       '[aria-label*="Participants"]',
       '[aria-label*="частник"]', '[aria-label*="часник"]',
       '#participants-list', '.participants-ul',
       '[class*="participants-list"]', '[class*="ParticipantsList"]',
       '[class*="participants-panel"]', '[class*="ParticipantsPanel"]',
+      '[class*="participants-ul"]', '[class*="ParticipantsUl"]',
     ]).find(visible);
   }
 
   function openParticipantsPanel() {
     if (findParticipantsPanel()) return true;
-    const btn = queryAll([
-      'button[aria-label*="Participants"]',
+    const btn = deepQueryAll([
+      '#participant button', '[data-feature-type="participant"]',
+      '#participant', 'button[aria-label*="Participants"]',
       'button[aria-label*="частник"]', 'button[aria-label*="часник"]',
       'button[data-testid="participants-button"]',
     ]).find(visible);
@@ -218,24 +224,20 @@ if (!window.__zoomwar_loaded) {
     return false;
   }
 
+  function participantRows() {
+    return deepQueryAll([
+      '[class*="participants-item"]', '[class*="ParticipantItem"]',
+      '.participants-li', 'li[class*="participant"]',
+      '[class*="participants-ul"] li', '[role="listitem"]',
+    ]).filter(visible);
+  }
+
   function scrapeParticipants() {
     openParticipantsPanel();
-    const panel = findParticipantsPanel() || document;
     const names = [];
-    const selectors = [
-      '.participants-item__name-section span',
-      '[class*="participant"] [class*="name"]',
-      '[class*="ParticipantItem"] span',
-      '.participants-li .participants-item__display-name',
-      '[data-testid*="participant"] span',
-      'li[class*="participant"] span',
-    ];
-    for (const sel of selectors) {
-      panel.querySelectorAll(sel).forEach((el) => {
-        const t = norm(el.textContent);
-        if (t && t.length > 1 && t.length < 50 && !isMe(t)) names.push(t);
-      });
-      if (names.length) break;
+    for (const row of participantRows()) {
+      const t = norm(row.textContent);
+      if (t && t.length > 1 && t.length < 50 && !isMe(t)) names.push(t);
     }
     const junk = ["mute", "unmute", "more", "host", "ещё", "еще", "ще",
                   "co-host", "соорганизатор", "организатор", "організатор"];
@@ -247,23 +249,46 @@ if (!window.__zoomwar_loaded) {
 
   // Find the list row for yourself (the one tagged "(Me)"/"(Я)"/"(Ви)").
   function findMyRow() {
-    const panel = findParticipantsPanel();
-    if (!panel) return null;
-    const rows = panel.querySelectorAll(
-      'li,[class*="participants-item"],[class*="ParticipantItem"]');
+    const rows = participantRows();
     for (const row of rows) {
       const t = norm(row.textContent);
-      if (isMe(t) && t.length < 80) return row;
+      if (isMe(t) && t.length < 120) return row;
     }
-    return null;
+    // Your own row is normally first in the list.
+    return rows[0] || null;
+  }
+
+  function dumpPanel(where) {
+    const panel = findParticipantsPanel();
+    if (panel) {
+      console.log("[ZoomWar] PANEL HTML @ " + where + ":\n" +
+                  panel.outerHTML.slice(0, 6000));
+    } else {
+      console.log("[ZoomWar] panel NOT found @ " + where);
+      dumpButtons(where);
+    }
+  }
+
+  // Click a menu item by text, piercing shadow DOM.
+  function deepClickByText(words) {
+    for (const n of deepQueryAll(['a', 'span', 'div', 'li', 'button',
+                                  '[role="menuitem"]', '[role="button"]'])) {
+      if (!visible(n)) continue;
+      const t = norm(n.textContent).toLowerCase();
+      if (t && t.length < 40 && words.some((w) => t.includes(w))) {
+        n.click();
+        return true;
+      }
+    }
+    return false;
   }
 
   async function renameMe(newName) {
     if (!openParticipantsPanel()) { toast("нет кнопки участников"); return; }
-    await sleep(300);
+    await sleep(350);
     const row = findMyRow();
     if (!row) {
-      dumpButtons("participants (no self row)");
+      dumpPanel("no self row");
       toast("не нашёл себя — F12, смотри [ZoomWar]");
       return;
     }
@@ -272,7 +297,7 @@ if (!window.__zoomwar_loaded) {
     for (const ev of ["mouseover", "mouseenter", "mousemove", "pointerover"]) {
       row.dispatchEvent(new MouseEvent(ev, { bubbles: true }));
     }
-    await sleep(300);
+    await sleep(350);
 
     // The row-level "More" button — scoped to this row, not the panel.
     let more = row.querySelector(
@@ -281,36 +306,34 @@ if (!window.__zoomwar_loaded) {
       'button[aria-label*="More options"], button[aria-label*="Подробнее"], ' +
       'button[aria-label*="Больше"], button.more-button, ' +
       '[data-testid="more-button"]');
-    // Else just the last button in the row (Zoom puts More last).
     if (!more || !visible(more)) {
       const btns = [...row.querySelectorAll("button")].filter(visible);
       more = btns[btns.length - 1] || null;
     }
     if (more) {
       more.click();
-      await sleep(300);
+      await sleep(350);
     } else {
-      console.log("[ZoomWar] self row html:", row.outerHTML.slice(0, 1500));
       row.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-      await sleep(300);
+      await sleep(350);
     }
 
-    // The Rename item lives in a popup menu at document level.
-    if (!clickByText(["rename", "переименовать", "перейменувати"])) {
-      console.log("[ZoomWar] self row html:", row.outerHTML.slice(0, 1500));
-      dumpButtons("after More click (no rename item)");
+    // The Rename item lives in a popup menu (possibly in shadow DOM).
+    if (!deepClickByText(["rename", "переименовать", "перейменувати"])) {
+      console.log("[ZoomWar] self row html:\n" + row.outerHTML.slice(0, 3000));
+      dumpPanel("after More click");
       toast("нет «Переименовать» — F12, смотри [ZoomWar]");
       return;
     }
-    await sleep(300);
+    await sleep(350);
 
-    const input = queryAll([
+    const input = deepQueryAll([
       '[role="dialog"] input[type="text"]',
       '.zm-modal input[type="text"]', '.zmu-modal input',
       'input[aria-label*="name"]', 'input[aria-label*="имя"]',
       'input[aria-label*="ім"]',
       'input[placeholder*="name"]', 'input[placeholder*="имя"]',
-      'input[placeholder*="ім"]',
+      'input[placeholder*="ім"]', 'input[type="text"]',
     ]).find(visible);
     if (!input) { toast("нет поля ввода имени"); return; }
 
@@ -321,8 +344,8 @@ if (!window.__zoomwar_loaded) {
     input.dispatchEvent(new Event("change", { bubbles: true }));
     await sleep(150);
 
-    clickByText(["save", "сохранить", "зберегти", "ok", "ок", "rename",
-                 "переименовать", "перейменувати"]);
+    deepClickByText(["save", "сохранить", "зберегти", "ok", "ок", "rename",
+                     "переименовать", "перейменувати"]);
     toast("ник → " + newName);
   }
 
