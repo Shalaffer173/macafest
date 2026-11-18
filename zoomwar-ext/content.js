@@ -94,13 +94,20 @@ if (!window.__zoomwar_loaded) {
   }
 
   function findHandEl() {
-    const cands = queryAll([
-      'button', '[role="button"]', '[role="menuitem"]',
-      '[role="menuitemcheckbox"]', '[aria-label]',
-    ]);
-    for (const el of cands) {
-      if (!visible(el)) continue;
-      if (HAND_WORDS.some((w) => hay(el).includes(w))) return el;
+    // Stable class used by Zoom's nonverbal-feedback (raise-hand) button.
+    for (const el of queryAll(['button.nonverbal-feedback',
+                               'button[class*="nonverbal-feedback"]'])) {
+      if (visible(el)) return el;
+    }
+    // The ✋ icon (unicode 270B) lives in a lazy-icon-nvf/270b svg.
+    for (const svg of queryAll(['svg[class*="nvf"]', 'svg[class*="270b"]'])) {
+      const btn = svg.closest("button");
+      if (btn && visible(btn)) return btn;
+    }
+    // Fallback: match by label/title/text.
+    for (const el of queryAll(['button', '[role="button"]',
+                               '[role="menuitem"]', '[aria-label]'])) {
+      if (visible(el) && HAND_WORDS.some((w) => hay(el).includes(w))) return el;
     }
     return null;
   }
@@ -139,27 +146,27 @@ if (!window.__zoomwar_loaded) {
   }
 
   async function pokeHand() {
-    // 1. A control already on screen (toolbar button or open popup).
+    // Fast path: the hand button is already on screen (the Reactions
+    // flyout stays open between ticks once opened), so just click it.
     let el = findHandEl();
-    if (el) { el.click(); toast("рука: " + labelText(el)); return; }
+    if (el) { el.click(); return; }
 
-    // 2. Open the Reactions popup and look again.
+    // Otherwise open the Reactions flyout once; next ticks hit the fast
+    // path above. The flyout is left open on purpose — reopening it every
+    // tick was what made the old version lag.
     const react = findReactionsButton();
     if (react) {
       react.click();
-      await sleep(400);
+      await sleep(250);
       el = findHandEl();
-      if (el) { el.click(); toast("рука: " + labelText(el)); return; }
+      if (el) { el.click(); return; }
       dumpButtons("reactions open");
-      react.click(); // close the popup
-      toast("руки нет в меню — открой F12, смотри [ZoomWar]");
+      toast("руки нет в меню — F12, смотри [ZoomWar]");
       return;
     }
 
-    // 3. Nothing matched at all — dump what is on screen.
     dumpButtons("no reactions button");
-    sendAltY();
-    toast("кнопка не найдена — открой F12, смотри [ZoomWar]");
+    toast("кнопка не найдена — F12, смотри [ZoomWar]");
   }
 
   function sendAltY() {
@@ -256,36 +263,49 @@ if (!window.__zoomwar_loaded) {
 
   async function renameMe(newName) {
     if (!openParticipantsPanel()) { toast("нет кнопки участников"); return; }
-    await sleep(250);
+    await sleep(300);
     const row = findMyRow();
-    if (!row) { toast("не нашёл себя в списке"); return; }
+    if (!row) {
+      dumpButtons("participants (no self row)");
+      toast("не нашёл себя — F12, смотри [ZoomWar]");
+      return;
+    }
 
     row.scrollIntoView({ block: "center" });
-    for (const ev of ["mouseover", "mouseenter", "mousemove"]) {
+    for (const ev of ["mouseover", "mouseenter", "mousemove", "pointerover"]) {
       row.dispatchEvent(new MouseEvent(ev, { bubbles: true }));
     }
-    await sleep(250);
+    await sleep(300);
 
     // The row-level "More" button — scoped to this row, not the panel.
-    const more = row.querySelector(
+    let more = row.querySelector(
       'button[aria-label*="More"], button[aria-label*="ещё"], ' +
       'button[aria-label*="Ещё"], button[aria-label*="ще"], ' +
-      'button.more-button, [data-testid="more-button"]');
-    if (more && visible(more)) {
+      'button[aria-label*="More options"], button[aria-label*="Подробнее"], ' +
+      'button[aria-label*="Больше"], button.more-button, ' +
+      '[data-testid="more-button"]');
+    // Else just the last button in the row (Zoom puts More last).
+    if (!more || !visible(more)) {
+      const btns = [...row.querySelectorAll("button")].filter(visible);
+      more = btns[btns.length - 1] || null;
+    }
+    if (more) {
       more.click();
-      await sleep(250);
+      await sleep(300);
     } else {
-      // Some layouts rename on a direct double-click of the name.
+      console.log("[ZoomWar] self row html:", row.outerHTML.slice(0, 1500));
       row.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-      await sleep(250);
+      await sleep(300);
     }
 
     // The Rename item lives in a popup menu at document level.
     if (!clickByText(["rename", "переименовать", "перейменувати"])) {
-      toast("нет пункта «Переименовать»");
+      console.log("[ZoomWar] self row html:", row.outerHTML.slice(0, 1500));
+      dumpButtons("after More click (no rename item)");
+      toast("нет «Переименовать» — F12, смотри [ZoomWar]");
       return;
     }
-    await sleep(250);
+    await sleep(300);
 
     const input = queryAll([
       '[role="dialog"] input[type="text"]',
