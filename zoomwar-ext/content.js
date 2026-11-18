@@ -94,17 +94,14 @@ if (!window.__zoomwar_loaded) {
   }
 
   function findHandEl() {
-    // Stable class used by Zoom's nonverbal-feedback (raise-hand) button.
-    for (const el of queryAll(['button.nonverbal-feedback',
-                               'button[class*="nonverbal-feedback"]'])) {
-      if (visible(el)) return el;
-    }
-    // The ✋ icon (unicode 270B) lives in a lazy-icon-nvf/270b svg.
-    for (const svg of queryAll(['svg[class*="nvf"]', 'svg[class*="270b"]'])) {
+    // The raise-hand button is one of several .nonverbal-feedback buttons
+    // (yes / no / slower / faster / coffee / hand), all sharing that class,
+    // so it must be singled out by the ✋ icon (unicode 270B) or its label —
+    // never by the shared class, which would grab the green "yes" check.
+    for (const svg of queryAll(['svg[class*="270b"]', 'svg[class*="270B"]'])) {
       const btn = svg.closest("button");
       if (btn && visible(btn)) return btn;
     }
-    // Fallback: match by label/title/text.
     for (const el of queryAll(['button', '[role="button"]',
                                '[role="menuitem"]', '[aria-label]'])) {
       if (visible(el) && HAND_WORDS.some((w) => hay(el).includes(w))) return el;
