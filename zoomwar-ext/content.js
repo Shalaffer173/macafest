@@ -491,11 +491,15 @@ if (!window.__zoomwar_loaded) {
       }
     }
     toast("ник → " + newName);
+    return true;
   }
 
   function startName(mode, manualNames, cooldownMs) {
     stopName();
     toast("ник ВКЛ (" + (mode === "auto" ? "из конфы" : "свои") + ")");
+    // Manual names cycle in the order typed; the cursor only advances after
+    // a rename went through, so a failed tick retries the same name.
+    let next = 0;
     const tick = async () => {
       if (state.nameBusy) return;
       state.nameBusy = true;
@@ -506,7 +510,11 @@ if (!window.__zoomwar_loaded) {
           pool = scrapeParticipants();
         }
         if (pool && pool.length) {
-          await renameMe(pool[Math.floor(Math.random() * pool.length)]);
+          if (mode === "auto") {
+            await renameMe(pool[Math.floor(Math.random() * pool.length)]);
+          } else if (await renameMe(pool[next % pool.length])) {
+            next = (next + 1) % pool.length;
+          }
         } else {
           toast("нет имён для смены");
         }
