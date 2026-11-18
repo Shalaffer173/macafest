@@ -289,18 +289,40 @@ if (!window.__zoomwar_loaded) {
   }
 
 
-  // Click a menu item by text, piercing shadow DOM.
+  // Click a menu item by text OR aria-label/title, piercing shadow DOM.
   function deepClickByText(words) {
     for (const n of deepQueryAll(['a', 'span', 'div', 'li', 'button',
                                   '[role="menuitem"]', '[role="button"]'])) {
       if (!visible(n)) continue;
-      const t = norm(n.textContent).toLowerCase();
-      if (t && t.length < 40 && words.some((w) => t.includes(w))) {
-        n.click();
-        return true;
-      }
+      const txt = norm(n.textContent);
+      if (txt.length > 60) continue;
+      const h = (txt + " " + (n.getAttribute("aria-label") || "") + " " +
+                 (n.getAttribute("title") || "")).toLowerCase();
+      if (words.some((w) => h.includes(w))) { n.click(); return true; }
     }
     return false;
+  }
+
+  // Dump every visible menu/popup item so the exact wording can be read.
+  function dumpMenu(where) {
+    const items = deepQueryAll([
+      '[role="menuitem"]', '[role="menu"] li', '[role="menu"] button',
+      '[role="menu"] a', '[class*="dropdown"] li', '[class*="dropdown"] a',
+      '[class*="menu"] li', '[class*="menu"] a', '[class*="menu"] button',
+    ]).filter(visible);
+    const seen = new Set();
+    const rows = [];
+    for (const el of items) {
+      const text = norm(el.textContent).slice(0, 50);
+      const aria = el.getAttribute("aria-label") || "";
+      const key = text + "|" + aria;
+      if ((text || aria) && !seen.has(key)) {
+        seen.add(key);
+        rows.push({ text, aria, cls: (el.className || "").toString().slice(0, 40) });
+      }
+    }
+    console.log("[ZoomWar] MENU @ " + where + ":", rows.length);
+    console.table(rows);
   }
 
   async function renameMe(newName) {
@@ -342,10 +364,11 @@ if (!window.__zoomwar_loaded) {
     }
 
     // The Rename item lives in a popup menu (possibly in shadow DOM).
-    if (!deepClickByText(["rename", "переименовать", "перейменувати"])) {
+    if (!deepClickByText(["rename", "переименовать", "перейменувати",
+                          "изменить имя", "змінити ім"])) {
       console.log("[ZoomWar] self row html:\n" + row.outerHTML.slice(0, 3000));
-      dumpParticipantsArea("after More click");
-      toast("нет «Переименовать» — F12, смотри [ZoomWar]");
+      dumpMenu("after More click");
+      toast("нет «Переименовать» — F12, смотри таблицу MENU");
       return;
     }
     await sleep(350);
