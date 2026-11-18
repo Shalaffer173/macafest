@@ -425,6 +425,13 @@ if (!window.__zoomwar_loaded) {
     ]).find(visible);
     if (!input) { toast("нет поля ввода имени"); return; }
 
+    // STOP pressed while this rename was in flight: back out of the dialog
+    // instead of saving one last name after the user turned it off.
+    if (!state.nameTimer) {
+      deepClickByText(["cancel", "отмена", "скасувати"]);
+      return;
+    }
+
     const setter = Object.getOwnPropertyDescriptor(
       window.HTMLInputElement.prototype, "value").set;
     setter.call(input, newName);
