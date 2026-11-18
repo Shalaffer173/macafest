@@ -79,49 +79,87 @@ if (!window.__zoomwar_loaded) {
 
   // ---------------- HAND RAISE ----------------
   const HAND_WORDS = [
-    "raise hand", "lower hand", "raise your hand",
-    "поднять руку", "опустить руку",
-    "підняти руку", "опустити руку", "прибрати руку",
+    "raise hand", "lower hand", "raise your hand", "lower your hand",
+    "поднять руку", "опустить руку", "поднимите руку",
+    "підняти руку", "опустити руку", "прибрати руку", "підніміть руку",
   ];
 
-  function findDirectHandButton() {
-    for (const b of queryAll(['button', '[role="button"]', '[aria-label]'])) {
-      if (!visible(b)) continue;
-      if (HAND_WORDS.some((l) => labelOf(b).includes(l))) return b;
+  // Match a control by its aria-label, title, OR visible text.
+  function hay(el) {
+    return (
+      (el.getAttribute && el.getAttribute("aria-label") || "") + " " +
+      (el.getAttribute && el.getAttribute("title") || "") + " " +
+      (el.textContent || "")
+    ).toLowerCase();
+  }
+
+  function findHandEl() {
+    const cands = queryAll([
+      'button', '[role="button"]', '[role="menuitem"]',
+      '[role="menuitemcheckbox"]', '[aria-label]',
+    ]);
+    for (const el of cands) {
+      if (!visible(el)) continue;
+      if (HAND_WORDS.some((w) => hay(el).includes(w))) return el;
     }
     return null;
   }
 
   function findReactionsButton() {
-    const words = ["reaction", "reactions", "react",
-                   "реакц", "реакці", "эмодзи", "емодзі"];
+    const words = ["reaction", "react", "реакц", "реакці",
+                   "эмодзи", "емодзі"];
     for (const b of queryAll(['button', '[role="button"]', '[aria-label]'])) {
       if (!visible(b)) continue;
-      if (words.some((l) => labelOf(b).includes(l))) return b;
+      if (words.some((l) => hay(b).includes(l))) return b;
     }
     return null;
   }
 
-  async function pokeHand() {
-    // 1. A direct toggle button, if this layout has one.
-    const direct = findDirectHandButton();
-    if (direct) { direct.click(); toast("рука нажата"); return; }
+  // Dump every visible clickable control to the console so the exact
+  // hand-raise label can be identified when matching fails.
+  function dumpButtons(where) {
+    const list = [];
+    for (const el of queryAll(['button', '[role="button"]',
+                               '[role="menuitem"]', '[aria-label]'])) {
+      if (!visible(el)) continue;
+      list.push({
+        label: (el.getAttribute("aria-label") || "").trim(),
+        title: (el.getAttribute("title") || "").trim(),
+        text: norm(el.textContent).slice(0, 40),
+      });
+    }
+    console.log("[ZoomWar] buttons @ " + where + ":", list.length);
+    console.table(list);
+    window.__zoomwar_buttons = list;
+  }
 
-    // 2. New layout: the hand lives inside the Reactions popup.
+  function labelText(el) {
+    return (el.getAttribute("aria-label") || norm(el.textContent) ||
+            el.getAttribute("title") || "?").trim().slice(0, 30);
+  }
+
+  async function pokeHand() {
+    // 1. A control already on screen (toolbar button or open popup).
+    let el = findHandEl();
+    if (el) { el.click(); toast("рука: " + labelText(el)); return; }
+
+    // 2. Open the Reactions popup and look again.
     const react = findReactionsButton();
     if (react) {
       react.click();
-      await sleep(300);
-      if (clickByText(HAND_WORDS)) { toast("рука (через Реакции)"); return; }
-      // Nothing matched — close the popup so it doesn't linger.
-      react.click();
-      toast("открыл Реакции, но пункта руки нет");
+      await sleep(400);
+      el = findHandEl();
+      if (el) { el.click(); toast("рука: " + labelText(el)); return; }
+      dumpButtons("reactions open");
+      react.click(); // close the popup
+      toast("руки нет в меню — открой F12, смотри [ZoomWar]");
       return;
     }
 
-    // 3. Last resort: the Alt+Y shortcut.
+    // 3. Nothing matched at all — dump what is on screen.
+    dumpButtons("no reactions button");
     sendAltY();
-    toast("Alt+Y (кнопка не найдена)");
+    toast("кнопка не найдена — открой F12, смотри [ZoomWar]");
   }
 
   function sendAltY() {
