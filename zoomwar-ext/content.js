@@ -16,7 +16,8 @@ if (!window.__zoomwar_loaded) {
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const norm = (s) => (s || "").trim();
-  const isMe = (t) => /\(\s*(me|я|ви|вы)\s*\)/i.test(t);
+  // Self tag: "(Me)", "(Я)", and combined forms like "(Host, me)" / "(Хост, я)".
+  const isMe = (t) => /\((?:[^)]*[,\s])?(?:me|я|ви|вы)\s*\)/i.test(t);
   const log = (...a) => console.log("[ZoomWar]", ...a);
 
   // On-page toast so the user sees what the extension is doing.
@@ -263,17 +264,20 @@ if (!window.__zoomwar_loaded) {
     }
   }
 
+  // Other participants' bare names: read the name element rather than the
+  // whole row (which also carries button text), and strip the role tag in
+  // brackets ("Кирило (Хост)" -> "Кирило") instead of dropping the person.
   function scrapeParticipants() {
     const names = [];
     for (const row of participantRows()) {
-      const t = norm(row.textContent);
-      if (t && t.length > 1 && t.length < 50 && !isMe(t)) names.push(t);
+      const nameEl = row.querySelector(
+        '[class*="display-name"], [class*="name-label"], [class*="__name"]');
+      const raw = norm((nameEl || row).textContent);
+      if (!raw || isMe(raw)) continue;
+      const name = raw.replace(/\s*\([^)]*\)\s*$/, "").replace(/\.{3}$/, "").trim();
+      if (name.length > 1 && name.length < 50) names.push(name);
     }
-    const junk = ["mute", "unmute", "more", "host", "ещё", "еще", "ще",
-                  "co-host", "соорганизатор", "организатор", "організатор"];
-    const clean = names.filter(
-      (t) => !junk.some((k) => t.toLowerCase().includes(k)));
-    state.lastParticipants = [...new Set(clean.length ? clean : names)];
+    state.lastParticipants = [...new Set(names)];
     return state.lastParticipants;
   }
 
@@ -288,20 +292,6 @@ if (!window.__zoomwar_loaded) {
     return rows[0] || null;
   }
 
-
-  // Click a menu item by text OR aria-label/title, piercing shadow DOM.
-  function deepClickByText(words) {
-    for (const n of deepQueryAll(['a', 'span', 'div', 'li', 'button',
-                                  '[role="menuitem"]', '[role="button"]'])) {
-      if (!visible(n)) continue;
-      const txt = norm(n.textContent);
-      if (txt.length > 60) continue;
-      const h = (txt + " " + (n.getAttribute("aria-label") || "") + " " +
-                 (n.getAttribute("title") || "")).toLowerCase();
-      if (words.some((w) => h.includes(w))) { n.click(); return true; }
-    }
-    return false;
-  }
 
   // Dump every visible menu/popup item so the exact wording can be read.
   // Logs one compact line (easy to screenshot) plus a table.
@@ -342,6 +332,79 @@ if (!window.__zoomwar_loaded) {
     console.table(rows);
   }
 
+  async function waitFor(fn, timeoutMs, stepMs = 100) {
+    const end = Date.now() + timeoutMs;
+    while (Date.now() < end) {
+      const v = fn();
+      if (v) return v;
+      await sleep(stepMs);
+    }
+    return null;
+  }
+
+  const RENAME_WORDS = ["rename", "переименовать", "перейменувати",
+                        "изменить имя", "змінити ім"];
+
+  // The Rename entry of the participant menu: a short label that starts
+  // with one of the words, so long containers and unrelated text don't match.
+  // Returns the deepest such element: the item is <li><a>Rename</a></li> and
+  // a click on the outer <li> never reaches a handler on the inner <a>,
+  // while a click on the <a> bubbles up to the <li> either way.
+  function findRenameItem() {
+    const portal = document.getElementById("zmu-portal-dropdown--participant-list");
+    const pools = [];
+    if (portal) pools.push([...portal.querySelectorAll(
+      'a,li,button,[role="menuitem"],span,div')]);
+    pools.push(deepQueryAll(['[role="menuitem"]', '.dropdown-menu a',
+                             '.dropdown-menu li', '.dropdown-menu button']));
+    for (const pool of pools) {
+      const hits = pool.filter((n) => {
+        if (!visible(n)) return false;
+        const t = norm(n.textContent).toLowerCase();
+        return t && t.length <= 30 && RENAME_WORDS.some((w) => t.startsWith(w));
+      });
+      const deepest = hits.find((n) => !hits.some((o) => o !== n && n.contains(o)));
+      if (deepest) return deepest;
+    }
+    return null;
+  }
+
+  // Only inputs inside a modal: a bare input[type=text] could be the chat box.
+  function findDialogInput() {
+    return deepQueryAll([
+      '.ReactModalPortal input', '[role="dialog"] input',
+      '.zm-modal input', '.zmu-modal input',
+      '[class*="modal"] input', '[class*="dialog"] input',
+    ]).find((i) => visible(i) && (!i.type || i.type === "text"));
+  }
+
+  function dialogOf(input) {
+    return input.closest('[role="dialog"], .ReactModal__Content, ' +
+                         '[class*="modal"], [class*="dialog"]') || document;
+  }
+
+  function clickInDialog(root, words) {
+    for (const b of root.querySelectorAll('button, [role="button"]')) {
+      if (!visible(b)) continue;
+      const t = norm(b.textContent).toLowerCase();
+      if (t && words.some((w) => t === w || t.startsWith(w))) {
+        b.click();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function pressEscape() {
+    for (const type of ["keydown", "keyup"]) {
+      const ev = new KeyboardEvent(type, {
+        key: "Escape", code: "Escape", keyCode: 27, which: 27, bubbles: true,
+      });
+      (document.activeElement || document.body).dispatchEvent(ev);
+    }
+    return true;
+  }
+
   async function renameMe(newName) {
     if (!(await openParticipants())) {
       toast("панель участников не открылась — F12, смотри [ZoomWar]");
@@ -359,88 +422,74 @@ if (!window.__zoomwar_loaded) {
     for (const ev of ["mouseover", "mouseenter", "mousemove", "pointerover"]) {
       row.dispatchEvent(new MouseEvent(ev, { bubbles: true }));
     }
-    await sleep(350);
+    await sleep(300);
 
-    // Zoom renders the participant menu into this body-level portal.
-    const portal = document.getElementById("zmu-portal-dropdown--participant-list");
-    const renameWords = ["rename", "переимен", "перейменув",
-                         "изменить имя", "змінити ім"];
-
-    const clickRenameInPortal = () => {
-      if (!portal) return false;
-      for (const n of portal.querySelectorAll(
-          'a,li,button,[role="menuitem"],div,span')) {
-        if (!visible(n)) continue;
-        const t = norm(n.textContent);
-        if (!t || t.length > 40) continue;
-        const h = (t + " " + (n.getAttribute("aria-label") || "")).toLowerCase();
-        if (renameWords.some((w) => h.includes(w))) { n.click(); return true; }
-      }
-      return false;
-    };
-
-    const rowButtons = [...row.querySelectorAll("button")].filter(visible);
-    let more = rowButtons.find((b) => {
+    // Only the row's "More options" dropdown toggle. Never fall back to
+    // other row buttons: those are Mute and Start Video.
+    const more = [...row.querySelectorAll("button")].filter(visible).find((b) => {
       const h = hay(b);
-      return h.includes("more") || h.includes("ещё") || h.includes("больше") ||
-             h.includes("подробнее") || h.includes("ще") ||
-             /more[-_]?button/i.test(b.className || "");
+      return /dropdown-toggle/i.test(b.className || "") ||
+             h.includes("more") || h.includes("ещё") || h.includes("больше") ||
+             h.includes("подробнее") || h.includes("більше");
     });
-    if (!more) more = rowButtons[rowButtons.length - 1];
-
-    if (more) { more.click(); await sleep(450); }
-
-    let opened = clickRenameInPortal() ||
-                 deepClickByText(renameWords);
-
-    // If the first More guess opened the wrong thing, try the other row
-    // buttons one by one until the rename item appears in the portal.
-    if (!opened) {
-      for (const b of rowButtons) {
-        if (b === more) continue;
-        b.click();
-        await sleep(400);
-        if (clickRenameInPortal()) { opened = true; break; }
-      }
+    if (!more) {
+      toast("нет кнопки «More options» в строке");
+      return;
     }
 
-    if (!opened) {
-      console.log("[ZoomWar] row buttons: " + rowButtons.map((b) =>
-        (b.getAttribute("aria-label") || "?") + " / " +
-        (b.className || "").toString().slice(0, 30)).join("  ||  "));
+    // A menu left open by an earlier tick would be closed by clicking the
+    // toggle again, so only click it when the Rename item is not already up.
+    let item = findRenameItem();
+    if (!item) {
+      more.click();
+      item = await waitFor(findRenameItem, 1500);
+    }
+    if (!item) {
+      const portal = document.getElementById("zmu-portal-dropdown--participant-list");
       console.log("[ZoomWar] portal html: " +
         (portal ? portal.outerHTML.slice(0, 2500) : "NO PORTAL"));
+      dumpMenu("after More options");
+      pressEscape();
       toast("нет «Переименовать» — F12, смотри [ZoomWar]");
       return;
     }
-    await sleep(350);
+    item.click();
 
-    const input = deepQueryAll([
-      '[role="dialog"] input[type="text"]',
-      '.zm-modal input[type="text"]', '.zmu-modal input',
-      'input[aria-label*="name"]', 'input[aria-label*="имя"]',
-      'input[aria-label*="ім"]',
-      'input[placeholder*="name"]', 'input[placeholder*="имя"]',
-      'input[placeholder*="ім"]', 'input[type="text"]',
-    ]).find(visible);
-    if (!input) { toast("нет поля ввода имени"); return; }
+    const input = await waitFor(findDialogInput, 2000);
+    if (!input) {
+      dumpMenu("rename dialog");
+      toast("окно переименования не открылось — F12, смотри [ZoomWar]");
+      return;
+    }
 
     // STOP pressed while this rename was in flight: back out of the dialog
     // instead of saving one last name after the user turned it off.
+    const dialog = dialogOf(input);
     if (!state.nameTimer) {
-      deepClickByText(["cancel", "отмена", "скасувати"]);
+      clickInDialog(dialog, ["cancel", "отмена", "скасувати"]) || pressEscape();
       return;
     }
 
     const setter = Object.getOwnPropertyDescriptor(
       window.HTMLInputElement.prototype, "value").set;
+    input.focus();
     setter.call(input, newName);
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
     await sleep(150);
 
-    deepClickByText(["save", "сохранить", "зберегти", "ok", "ок", "rename",
-                     "переименовать", "перейменувати"]);
+    const saved = clickInDialog(dialog, [
+      "save", "rename", "change", "ok",
+      "сохранить", "переименовать", "изменить", "ок",
+      "зберегти", "перейменувати", "змінити",
+    ]);
+    if (!saved) {
+      for (const type of ["keydown", "keyup"]) {
+        input.dispatchEvent(new KeyboardEvent(type, {
+          key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true,
+        }));
+      }
+    }
     toast("ник → " + newName);
   }
 
