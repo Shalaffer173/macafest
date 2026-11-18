@@ -304,12 +304,28 @@ if (!window.__zoomwar_loaded) {
   }
 
   // Dump every visible menu/popup item so the exact wording can be read.
+  // Logs one compact line (easy to screenshot) plus a table.
   function dumpMenu(where) {
-    const items = deepQueryAll([
+    let items = deepQueryAll([
       '[role="menuitem"]', '[role="menu"] li', '[role="menu"] button',
       '[role="menu"] a', '[class*="dropdown"] li', '[class*="dropdown"] a',
       '[class*="menu"] li', '[class*="menu"] a', '[class*="menu"] button',
+      '[class*="popover"] li', '[class*="popover"] button',
+      '[class*="context"] li', '[class*="context"] button',
     ]).filter(visible);
+
+    // Fallback: if the menu selectors matched nothing, sweep every short
+    // visible label on the page so the real wording still shows up.
+    if (items.length === 0) {
+      items = deepQueryAll(['a', 'li', 'button', 'span', 'div',
+                            '[role="menuitem"]'])
+        .filter((el) => {
+          if (!visible(el)) return false;
+          const t = norm(el.textContent);
+          return t.length >= 2 && t.length <= 30 && el.children.length <= 1;
+        });
+    }
+
     const seen = new Set();
     const rows = [];
     for (const el of items) {
@@ -318,10 +334,11 @@ if (!window.__zoomwar_loaded) {
       const key = text + "|" + aria;
       if ((text || aria) && !seen.has(key)) {
         seen.add(key);
-        rows.push({ text, aria, cls: (el.className || "").toString().slice(0, 40) });
+        rows.push({ text, aria });
       }
     }
-    console.log("[ZoomWar] MENU @ " + where + ":", rows.length);
+    const line = rows.map((r) => r.text || "[" + r.aria + "]").join(" | ");
+    console.log("[ZoomWar] MENU @ " + where + " (" + rows.length + "): " + line);
     console.table(rows);
   }
 
