@@ -401,21 +401,43 @@ if (!window.__zoomwar_loaded) {
     state.nameTimer = null;
   }
 
+  // The Zoom page is split across frames (meeting, whiteboard, ...). The
+  // script loads in all of them, so only the frame that actually holds the
+  // meeting controls should act — otherwise the whiteboard frame grabs the
+  // commands and reports no participants.
+  function hasMeetingUI() {
+    return deepQueryAll([
+      '#react', '#participant',
+      '[data-feature-type="react"]', '[data-feature-type="participant"]',
+      'svg[class*="270b"]', 'button[class*="nonverbal-feedback"]',
+    ]).some(visible) || !!findReactionsButton();
+  }
+
   // ---------------- MESSAGING ----------------
   const runtime = (typeof browser !== "undefined") ? browser : chrome;
   runtime.runtime.onMessage.addListener((msg) => {
-    switch (msg && msg.type) {
+    const t = msg && msg.type;
+
+    if (t === "status") {
+      return Promise.resolve({
+        hand: !!state.handTimer,
+        name: !!state.nameTimer,
+        meeting: hasMeetingUI(),
+        participants: state.lastParticipants,
+      });
+    }
+
+    // Only the meeting frame runs the actions; other frames stay silent.
+    if ((t === "hand_start" || t === "name_start") && !hasMeetingUI()) {
+      return Promise.resolve({ ok: true, skipped: true });
+    }
+
+    switch (t) {
       case "hand_start": startHand(msg.cooldownMs); break;
       case "hand_stop": stopHand(); toast("рука ВЫКЛ"); break;
       case "name_start":
         startName(msg.mode, msg.names || [], msg.cooldownMs); break;
       case "name_stop": stopName(); toast("ник ВЫКЛ"); break;
-      case "status":
-        return Promise.resolve({
-          hand: !!state.handTimer,
-          name: !!state.nameTimer,
-          participants: state.lastParticipants,
-        });
     }
     return Promise.resolve({ ok: true });
   });
