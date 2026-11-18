@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "ZoomWar",
+  "version": "1.0",
+  "description": "Поднятие руки по кругу и смена ника в веб-Zoom",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "zoomwar@local",
+      "strict_min_version": "109.0"
+    }
+  },
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": ["https://*.zoom.us/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_title": "ZoomWar",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "48": "icons/icon.svg",
+      "96": "icons/icon.svg"
+    }
+  },
+  "icons": {
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg"
+  }
+}
