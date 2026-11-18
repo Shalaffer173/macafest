@@ -361,31 +361,56 @@ if (!window.__zoomwar_loaded) {
     }
     await sleep(350);
 
-    // The row-level "More" button — scoped to this row, not the panel.
-    let more = row.querySelector(
-      'button[aria-label*="More"], button[aria-label*="ещё"], ' +
-      'button[aria-label*="Ещё"], button[aria-label*="ще"], ' +
-      'button[aria-label*="More options"], button[aria-label*="Подробнее"], ' +
-      'button[aria-label*="Больше"], button.more-button, ' +
-      '[data-testid="more-button"]');
-    if (!more || !visible(more)) {
-      const btns = [...row.querySelectorAll("button")].filter(visible);
-      more = btns[btns.length - 1] || null;
-    }
-    if (more) {
-      more.click();
-      await sleep(350);
-    } else {
-      row.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-      await sleep(350);
+    // Zoom renders the participant menu into this body-level portal.
+    const portal = document.getElementById("zmu-portal-dropdown--participant-list");
+    const renameWords = ["rename", "переимен", "перейменув",
+                         "изменить имя", "змінити ім"];
+
+    const clickRenameInPortal = () => {
+      if (!portal) return false;
+      for (const n of portal.querySelectorAll(
+          'a,li,button,[role="menuitem"],div,span')) {
+        if (!visible(n)) continue;
+        const t = norm(n.textContent);
+        if (!t || t.length > 40) continue;
+        const h = (t + " " + (n.getAttribute("aria-label") || "")).toLowerCase();
+        if (renameWords.some((w) => h.includes(w))) { n.click(); return true; }
+      }
+      return false;
+    };
+
+    const rowButtons = [...row.querySelectorAll("button")].filter(visible);
+    let more = rowButtons.find((b) => {
+      const h = hay(b);
+      return h.includes("more") || h.includes("ещё") || h.includes("больше") ||
+             h.includes("подробнее") || h.includes("ще") ||
+             /more[-_]?button/i.test(b.className || "");
+    });
+    if (!more) more = rowButtons[rowButtons.length - 1];
+
+    if (more) { more.click(); await sleep(450); }
+
+    let opened = clickRenameInPortal() ||
+                 deepClickByText(renameWords);
+
+    // If the first More guess opened the wrong thing, try the other row
+    // buttons one by one until the rename item appears in the portal.
+    if (!opened) {
+      for (const b of rowButtons) {
+        if (b === more) continue;
+        b.click();
+        await sleep(400);
+        if (clickRenameInPortal()) { opened = true; break; }
+      }
     }
 
-    // The Rename item lives in a popup menu (possibly in shadow DOM).
-    if (!deepClickByText(["rename", "переименовать", "перейменувати",
-                          "изменить имя", "змінити ім"])) {
-      console.log("[ZoomWar] self row html:\n" + row.outerHTML.slice(0, 3000));
-      dumpMenu("after More click");
-      toast("нет «Переименовать» — F12, смотри таблицу MENU");
+    if (!opened) {
+      console.log("[ZoomWar] row buttons: " + rowButtons.map((b) =>
+        (b.getAttribute("aria-label") || "?") + " / " +
+        (b.className || "").toString().slice(0, 30)).join("  ||  "));
+      console.log("[ZoomWar] portal html: " +
+        (portal ? portal.outerHTML.slice(0, 2500) : "NO PORTAL"));
+      toast("нет «Переименовать» — F12, смотри [ZoomWar]");
       return;
     }
     await sleep(350);
